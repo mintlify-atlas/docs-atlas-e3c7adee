@@ -1,0 +1,140 @@
+---
+title: "Restrict agent capabilities with allowlists"
+description: "Lock down Buildkite agents with repository, plugin, and environment variable allowlists, plus flags to disable command eval, local hooks, and plugins entirely."
+---
+
+Buildkite agents that serve shared infrastructure — such as multi-tenant build pools or agents that run pipelines from many teams — need defence-in-depth controls beyond authentication. The agent provides a set of flags that restrict what jobs are allowed to do: limiting which repositories can be cloned, which plugins can be loaded, which environment variables are visible, and whether arbitrary commands or local hooks can run at all. Used together, these flags let you define a least-privilege profile for each agent pool.
+
+## Restricting which repositories agents will clone
+
+<ParamField path="--allowed-repositories" type="string[]">
+  A comma-separated list of regular expressions. The agent refuses to clone any repository whose URL does not match at least one pattern. Set via `BUILDKITE_ALLOWED_REPOSITORIES`.
+</ParamField>
+
+Each value is a regular expression, not a glob. Anchor patterns with `^` and `$` to prevent partial matches:
+
+```bash
+buildkite-agent start \
+  --allowed-repositories "^git@github\.com:my-org/.*" \
+  --allowed-repositories "^https://github\.com/my-org/.*"
+```
+
+If the agent attempts to check out a repository whose URL does not match any pattern, the job fails before the checkout begins.
+
+<Note>
+  When no `--allowed-repositories` are configured, the agent will clone any repository. Configure this flag on agents that should only work with your organisation's repositories.
+</Note>
+
+## Restricting which plugins agents will load
+
+<ParamField path="--allowed-plugins" type="string[]">
+  A comma-separated list of regular expressions. The agent refuses to load any plugin whose reference does not match at least one pattern. Set via `BUILDKITE_ALLOWED_PLUGINS`.
+</ParamField>
+
+Plugin references are matched as provided in the pipeline YAML. Anchor your expressions to be precise:
+
+```bash
+buildkite-agent start \
+  --allowed-plugins "^buildkite-plugins/.*$" \
+  --allowed-plugins "^my-org/.*$" \
+  --allowed-plugins "^/var/lib/buildkite-plugins/.*"
+```
+
+<Warning>
+  If you enable `--no-command-eval` or `--no-local-hooks` without explicitly passing `--no-plugins=false`, plugins are disabled automatically. When you do set `--no-plugins=false` alongside these flags, the agent emits a warning reminding you to verify your plugin allowlist, because plugins can execute arbitrary hooks and commands.
+</Warning>
+
+## Controlling which environment variables jobs can see
+
+By default, jobs receive all environment variables that are configured on the pipeline or sent by the Buildkite backend. The environment variable allowlist restricts this to a defined set.
+
+<ParamField path="--enable-environment-variable-allowlist" type="boolean" default="false">
+  Activates the environment variable allowlist. When set, only variables whose names match the patterns in `--allowed-environment-variables` (or variables set by Buildkite itself) are passed to jobs. Set via `BUILDKITE_ENABLE_ENVIRONMENT_VARIABLE_ALLOWLIST`.
+</ParamField>
+
+<ParamField path="--allowed-environment-variables" type="string[]">
+  A comma-separated list of regular expressions. Variables whose names match at least one pattern are passed through to the job. Buildkite-internal variables (those matching `^BUILDKITE$`, `^BUILDKITE_.*$`, and `^CI$`) are always allowed regardless of this list. Requires `--enable-environment-variable-allowlist`. Set via `BUILDKITE_ALLOWED_ENVIRONMENT_VARIABLES`.
+</ParamField>
+
+```bash
+buildkite-agent start \
+  --enable-environment-variable-allowlist \
+  --allowed-environment-variables "^MYAPP_.*$" \
+  --allowed-environment-variables "^AWS_.*$" \
+  --allowed-environment-variables "^PATH$"
+```
+
+<Warning>
+  Setting `--allowed-environment-variables` without also setting `--enable-environment-variable-allowlist` is an error and the agent will refuse to start.
+</Warning>
+
+## Disabling arbitrary command evaluation
+
+<ParamField path="--no-command-eval" type="boolean" default="false">
+  Prevent the agent from running arbitrary console commands. When set, the agent will not execute the `command` field of job steps. This also disables plugins unless `--no-plugins=false` is explicitly provided. Set via `BUILDKITE_NO_COMMAND_EVAL`.
+</ParamField>
+
+This flag is appropriate for agents that should only run pre-defined bootstrap scripts and not execute ad-hoc commands defined in pipeline YAML.
+
+## Disabling local hooks
+
+<ParamField path="--no-local-hooks" type="boolean" default="false">
+  Prevent hooks defined in the checked-out repository (`.buildkite/hooks/`) from running. Only agent-level hooks (in the `hooks-path` directory) are executed. Like `--no-command-eval`, this also disables plugins unless `--no-plugins=false` is explicitly provided. Set via `BUILDKITE_NO_LOCAL_HOOKS`.
+</ParamField>
+
+Local hooks give pipeline authors the ability to run arbitrary code during the bootstrap. Disabling them on shared agents limits the attack surface for malicious or misconfigured repositories.
+
+## Disabling plugins entirely
+
+<ParamField path="--no-plugins" type="boolean" default="false">
+  Prevent the agent from loading any plugins, regardless of what a pipeline specifies. Set via `BUILDKITE_NO_PLUGINS`.
+</ParamField>
+
+When `--no-command-eval` or `--no-local-hooks` is set, `--no-plugins` is implied unless you explicitly pass `--no-plugins=false`.
+
+## Plugin validation
+
+<ParamField path="--no-plugin-validation" type="boolean" default="true">
+  Skip validation of plugin configuration and requirements. This is the **default**. Set via `BUILDKITE_NO_PLUGIN_VALIDATION`.
+</ParamField>
+
+<Warning>
+  Despite the `--no-plugin-validation` flag defaulting to `true` (validation disabled), do not rely on plugin validation as a security control. Use `--allowed-plugins` with explicit patterns to control which plugins can run. Plugin validation checks configuration schema, not whether a plugin is trusted.
+</Warning>
+
+## Practical example: locked-down agent pool
+
+The following configuration creates an agent pool suitable for running pipelines from multiple teams that share infrastructure. It constrains the pool to a single organisation's repositories, a curated set of approved plugins, and a fixed list of environment variables, while preventing ad-hoc commands and local repository hooks.
+
+```cfg
+# /etc/buildkite-agent/buildkite-agent.cfg
+
+token="..."
+build-path="/var/lib/buildkite-agent/builds"
+
+# Restrict cloneable repositories to the company GitHub org
+allowed-repositories="^git@github\.com:acme-corp/.*,^https://github\.com/acme-corp/.*"
+
+# Only allow plugins maintained by the platform team
+allowed-plugins="^buildkite-plugins/docker.*$,^buildkite-plugins/aws-assume-role.*$,^acme-corp/.*$"
+
+# Restrict environment variables visible to jobs
+enable-environment-variable-allowlist=true
+allowed-environment-variables="^MYAPP_.*$,^AWS_.*$,^PATH$,^HOME$,^TMPDIR$"
+
+# Disable local hooks; plugins will also be disabled unless explicitly re-enabled
+no-local-hooks=true
+
+# Re-enable plugins despite no-local-hooks (requires allowed-plugins to be set)
+no-plugins=false
+```
+
+Start multiple agents from this configuration:
+
+```bash
+buildkite-agent start --config /etc/buildkite-agent/buildkite-agent.cfg --spawn 4
+```
+
+<Note>
+  The `--allowed-repositories`, `--allowed-plugins`, and `--allowed-environment-variables` flags all accept regular expressions. Test your patterns carefully — an overly broad pattern can allow unintended repositories or plugins, while an overly narrow one can break legitimate pipelines.
+</Note>

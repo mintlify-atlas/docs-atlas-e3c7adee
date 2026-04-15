@@ -1,80 +1,127 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: "Get started with Buildkite Agent"
+description: "Start your first Buildkite Agent in 4 steps — install the agent, grab your token, configure build paths, and connect to Buildkite."
 ---
 
-## Get started in three steps
+This guide walks you through installing the Buildkite Agent, retrieving your agent token, and starting your first agent so it appears in the Buildkite dashboard ready to accept jobs.
 
-Get your documentation site running locally and make your first customization.
+<Steps>
+  <Step title="Install the agent">
+    Choose the installation method for your platform and follow the instructions on the [installation page](/installation).
 
-### Step 1: Set up your local environment
+    <CodeGroup>
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+    ```bash macOS (Homebrew)
+    brew install buildkite/buildkite/buildkite-agent
+    ```
 
-### Step 2: Deploy your changes
+    ```bash Linux (shell installer)
+    bash -c "`curl -sL https://raw.githubusercontent.com/buildkite/agent/main/install.sh`"
+    ```
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+    ```powershell Windows (PowerShell, elevated)
+    $env:buildkiteAgentToken = "your-agent-token"
+    iex ((New-Object System.Net.WebClient).DownloadString(
+      'https://raw.githubusercontent.com/buildkite/agent/main/install.ps1'
+    ))
+    ```
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+    ```bash Docker
+    docker pull buildkite/agent:3-ubuntu-22.04
+    ```
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+    </CodeGroup>
 
-### Step 3: Go live
+    Confirm the binary is available before continuing:
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+    ```bash
+    buildkite-agent --version
+    ```
+  </Step>
+
+  <Step title="Get your agent token">
+    Your agent token is how the agent authenticates with Buildkite. To find it:
+
+    1. Log in to [buildkite.com](https://buildkite.com) and open your organization.
+    2. Click **Agents** in the top navigation.
+    3. Copy the token shown in the **Agent token** section.
+
+    <Warning>
+      Treat your agent token like a password. Anyone with this token can register agents that run jobs in your organization. Do not commit it to source control.
+    </Warning>
+  </Step>
+
+  <Step title="Start the agent">
+    Pass your token and a local directory for build checkouts to `buildkite-agent start`:
+
+    ```bash
+    buildkite-agent start --token=<your-token> --build-path=/tmp/buildkite-builds
+    ```
+
+    <Note>
+      `--build-path` must be a directory writable by the user running the agent. Create it first if it does not exist: `mkdir -p /tmp/buildkite-builds`.
+    </Note>
+
+    When started, the agent:
+
+    1. **Registers** a new agent identity with Buildkite using the token
+    2. **Pings** the Buildkite API on a regular interval looking for scheduled jobs
+    3. **Accepts** a job when one is dispatched to this agent's queue
+    4. **Runs** the job bootstrap, checking out code and executing your pipeline steps
+    5. **Streams** log output and artifacts back to Buildkite in real time
+
+    You should see output similar to:
+
+    ```text
+    buildkite-agent v3.123.0 starting...
+    Registering agent with Buildkite...
+    Agent registered: <hostname>-1 (queue: default)
+    Connecting to Buildkite...
+    Waiting for work...
+    ```
+
+    <Tip>
+      To run the agent in the background as a service, use your platform's service manager: `systemctl enable --now buildkite-agent` on systemd Linux, or follow the Homebrew service instructions on macOS.
+    </Tip>
+  </Step>
+
+  <Step title="Verify the agent and run a test job">
+    **Check the agent appears in Buildkite:**
+
+    1. Open **Agents** in your Buildkite organization.
+    2. You should see your agent listed with a green **Connected** status and its hostname as the name.
+
+    **Trigger a test job:**
+
+    Create a pipeline with a minimal `pipeline.yml` and trigger a build:
+
+    ```yaml
+    steps:
+      - label: "Test step"
+        command: "echo 'Hello from Buildkite!'"
+    ```
+
+    Once the build is triggered, the agent picks up the job, runs the command, and streams the output back. You will see the log in real time on the build page.
+
+    <Note>
+      If no agent appears within a minute, check that `--token` is correct and that the agent host has outbound HTTPS access to `agent.buildkite.com`.
+    </Note>
+  </Step>
+</Steps>
 
 ## Next steps
 
-Now that you have your docs running, explore these key features:
-
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Configuration" icon="sliders" href="/configuration/overview">
+    Set queues, tags, hook paths, and all other agent options.
+  </Card>
+  <Card title="Hooks" icon="hook" href="/configuration/hooks">
+    Run shell scripts at every stage of the job lifecycle.
+  </Card>
+  <Card title="Plugins" icon="puzzle-piece" href="/configuration/plugins">
+    Extend jobs with reusable plugin steps.
+  </Card>
+  <Card title="Pipeline signing" icon="shield-halved" href="/security/pipeline-signing">
+    Sign and verify pipelines to prevent tampering.
+  </Card>
 </CardGroup>
-
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>

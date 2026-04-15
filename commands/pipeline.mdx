@@ -1,0 +1,152 @@
+---
+title: "buildkite-agent pipeline — upload pipeline definitions"
+description: "Upload a YAML or JSON pipeline to a running build, optionally replacing remaining steps. Supports signing, dynamic generation via stdin, and if_changed filters."
+---
+
+`buildkite-agent pipeline upload` lets you change the pipeline of a running build by uploading a YAML (recommended) or JSON configuration file. This is the primary mechanism for dynamic pipelines — generating steps at runtime based on code changes, environment state, or any other condition. The command can read from a file path argument, from stdin, or discover a default configuration file automatically.
+
+## upload
+
+```bash
+buildkite-agent pipeline upload [file] [options...]
+```
+
+If no file is specified and stdin is not a pipe, the agent searches the working directory for a pipeline file in the following order:
+
+1. `buildkite.yml`
+2. `buildkite.yaml`
+3. `buildkite.json`
+4. `.buildkite/pipeline.yml`
+5. `.buildkite/pipeline.yaml`
+6. `.buildkite/pipeline.json`
+7. `buildkite/pipeline.yml`
+8. `buildkite/pipeline.yaml`
+9. `buildkite/pipeline.json`
+
+<Note>
+  Each configuration file may contain at most 500 steps. For larger pipelines,
+  split the steps across multiple files and upload them in separate steps.
+</Note>
+
+### Flags
+
+<ParamField path="--replace" type="bool">
+  Replace all remaining steps in the build with the uploaded steps. Jobs that are already running are not affected. Default: `false`. Environment variable: `BUILDKITE_PIPELINE_REPLACE`
+</ParamField>
+
+<ParamField path="--job" type="string">
+  The job making the change. Defaults to `BUILDKITE_JOB_ID`. Environment variable: `BUILDKITE_JOB_ID`
+</ParamField>
+
+<ParamField path="--dry-run" type="bool">
+  Echo the parsed pipeline to stdout instead of uploading it. Useful for debugging. Default: `false`. Environment variable: `BUILDKITE_PIPELINE_UPLOAD_DRY_RUN`
+</ParamField>
+
+<ParamField path="--format" type="string">
+  Output format in dry-run mode. One of `json` or `yaml`. Default: `json`. Environment variable: `BUILDKITE_PIPELINE_UPLOAD_DRY_RUN_FORMAT`
+</ParamField>
+
+<ParamField path="--no-interpolation" type="bool">
+  Skip environment variable interpolation before upload. Default: `false`. Environment variable: `BUILDKITE_PIPELINE_NO_INTERPOLATION`
+</ParamField>
+
+<ParamField path="--reject-secrets" type="bool">
+  Fail the upload if the pipeline contains values that match redacted environment variable patterns. Default: `false`. Environment variable: `BUILDKITE_AGENT_PIPELINE_UPLOAD_REJECT_SECRETS`
+</ParamField>
+
+<ParamField path="--redacted-vars" type="string">
+  Pattern of environment variable names containing sensitive values. Default patterns include `*_PASSWORD`, `*_SECRET`, `*_TOKEN`, `*_API_KEY`, etc. Environment variable: `BUILDKITE_REDACTED_VARS`
+</ParamField>
+
+### `if_changed` flags
+
+<ParamField path="--apply-if-changed" type="bool">
+  Evaluate `if_changed` keys in pipeline steps against the git diff. Steps whose glob patterns match no changed files are skipped. Default: `true`. Environment variable: `BUILDKITE_AGENT_APPLY_IF_CHANGED`
+</ParamField>
+
+<ParamField path="--git-diff-base" type="string">
+  Base ref for the git diff used by `if_changed`. Defaults to `origin/$BUILDKITE_PULL_REQUEST_BASE_BRANCH`, then `origin/$BUILDKITE_PIPELINE_DEFAULT_BRANCH`, then `origin/main`. Environment variable: `BUILDKITE_GIT_DIFF_BASE`
+</ParamField>
+
+<ParamField path="--fetch-diff-base" type="bool">
+  Fetch the diff base ref before computing the diff. Default: `false`. Environment variable: `BUILDKITE_FETCH_DIFF_BASE`
+</ParamField>
+
+<ParamField path="--changed-files-path" type="string">
+  Path to a newline-separated file listing changed files. When provided, git commands are skipped. Environment variable: `BUILDKITE_CHANGED_FILES_PATH`
+</ParamField>
+
+### Signing flags
+
+<ParamField path="--jwks-file" type="string">
+  Path to a JWKS file. Passing this flag enables pipeline signing for the uploaded pipeline. Environment variable: `BUILDKITE_AGENT_JWKS_FILE`
+</ParamField>
+
+<ParamField path="--jwks-key-id" type="string">
+  JWKS key ID to use when signing. Required when using a JWKS with multiple keys. Environment variable: `BUILDKITE_AGENT_JWKS_KEY_ID`
+</ParamField>
+
+<ParamField path="--signing-aws-kms-key" type="string">
+  AWS KMS key identifier used to sign the pipeline. Environment variable: `BUILDKITE_AGENT_AWS_KMS_KEY`
+</ParamField>
+
+<ParamField path="--signing-gcp-kms-key" type="string">
+  GCP KMS key identifier used to sign the pipeline. Format: `projects/*/locations/*/keyRings/*/cryptoKeys/*/cryptoKeyVersions/*`. Environment variable: `BUILDKITE_AGENT_GCP_KMS_KEY`
+</ParamField>
+
+<ParamField path="--debug-signing" type="bool">
+  Enable debug logging for pipeline signing. May expose secrets in logs. Requires debug logging to be enabled. Default: `false`. Environment variable: `BUILDKITE_AGENT_DEBUG_SIGNING`
+</ParamField>
+
+## Examples
+
+<CodeGroup>
+
+```bash Auto-discover pipeline
+buildkite-agent pipeline upload
+```
+
+```bash Upload a specific file
+buildkite-agent pipeline upload my-custom-pipeline.yml
+```
+
+```bash Dynamic pipeline from a script
+./scripts/generate-pipeline | buildkite-agent pipeline upload
+```
+
+```bash Replace remaining steps
+buildkite-agent pipeline upload release-pipeline.yml --replace
+```
+
+```bash Dry run (preview parsed JSON)
+buildkite-agent pipeline upload --dry-run --format yaml
+```
+
+</CodeGroup>
+
+### Example pipeline YAML
+
+```yaml
+steps:
+  - label: "Tests"
+    command: "make test"
+    if_changed:
+      - "src/**"
+      - "tests/**"
+
+  - label: "Lint"
+    command: "make lint"
+    if_changed: "*.go"
+
+  - wait
+
+  - label: "Deploy"
+    command: "make deploy"
+    branches: "main"
+```
+
+<Tip>
+  Use `buildkite-agent pipeline upload --dry-run --format yaml` to preview how
+  the agent parses and interpolates your pipeline before uploading it. All
+  logging goes to stderr, so the parsed pipeline is the only output on stdout.
+</Tip>

@@ -1,0 +1,226 @@
+---
+title: "Upload and download artifacts in Buildkite jobs"
+description: "Use buildkite-agent artifact to upload build outputs, download files across pipeline steps, search by glob, and verify integrity with checksums."
+---
+
+The Buildkite Agent provides the `buildkite-agent artifact` command group for storing and retrieving files produced during a build. Artifacts can be uploaded from one step and downloaded by any subsequent step in the same pipeline, making them the standard mechanism for passing files — compiled binaries, test reports, coverage data, release archives — between jobs.
+
+By default, artifacts are stored in a Buildkite-managed Amazon S3 bucket and retained for six months. You can also direct uploads to your own Amazon S3, Google Cloud Storage, or Artifactory instance.
+
+## Upload
+
+```
+buildkite-agent artifact upload [options] <pattern> [destination]
+```
+
+The `<pattern>` argument is a glob that the agent resolves against the current working directory. Matching files are uploaded to the current job. Quote the pattern to prevent the shell from expanding it before the agent sees it.
+
+```bash
+# Upload all log files under the log/ directory
+buildkite-agent artifact upload "log/**/*.log"
+
+# Upload a single file
+buildkite-agent artifact upload "dist/my-app.tar.gz"
+```
+
+### Uploading to custom storage
+
+Pass a `destination` URL to upload to your own storage backend instead of Buildkite-managed storage.
+
+<CodeGroup>
+```bash Amazon S3
+export BUILDKITE_S3_ACCESS_KEY_ID=xxx
+export BUILDKITE_S3_SECRET_ACCESS_KEY=yyy
+export BUILDKITE_S3_DEFAULT_REGION=eu-central-1   # default: us-east-1
+export BUILDKITE_S3_ACL=private                    # default: public-read
+
+buildkite-agent artifact upload "dist/*.tar.gz" \
+  "s3://my-bucket/$BUILDKITE_JOB_ID"
+```
+
+```bash Google Cloud Storage
+export BUILDKITE_GS_ACL=private
+
+buildkite-agent artifact upload "dist/*.tar.gz" \
+  "gs://my-gcs-bucket/$BUILDKITE_JOB_ID"
+```
+
+```bash Artifactory
+export BUILDKITE_ARTIFACTORY_URL=https://my-instance.example.com/artifactory
+export BUILDKITE_ARTIFACTORY_USER=my-user
+export BUILDKITE_ARTIFACTORY_PASSWORD=xxx
+
+buildkite-agent artifact upload "dist/*.tar.gz" \
+  "rt://my-artifactory-repo/$BUILDKITE_JOB_ID"
+```
+</CodeGroup>
+
+The destination can also be provided via the `BUILDKITE_ARTIFACT_UPLOAD_DESTINATION` environment variable.
+
+### Upload flags
+
+| Flag | Env var | Description |
+|------|---------|-------------|
+| `--job` | `BUILDKITE_JOB_ID` | The job to associate the artifacts with. Defaults to the current job. |
+| `--content-type` | `BUILDKITE_ARTIFACT_CONTENT_TYPE` | Override the Content-Type header sent with the upload. Detected automatically if not set. |
+| `--literal` | `BUILDKITE_AGENT_ARTIFACT_LITERAL` | Treat the upload path as a literal file path rather than a glob pattern. |
+| `--delimiter` | `BUILDKITE_AGENT_ARTIFACT_DELIMITER` | Character(s) used to split multiple paths in a single argument. Defaults to `;`. Set to empty string to disable splitting. |
+| `--glob-resolve-follow-symlinks` | `BUILDKITE_AGENT_ARTIFACT_GLOB_RESOLVE_FOLLOW_SYMLINKS` | Follow symlinks to directories when resolving glob patterns. |
+| `--upload-skip-symlinks` | `BUILDKITE_ARTIFACT_UPLOAD_SKIP_SYMLINKS` | After glob resolution, skip files that are symlinks. |
+
+### Symlink handling
+
+By default, the agent follows symlinks to files during glob resolution (the linked file content is uploaded) but does not descend into symlinked directories. Use `--glob-resolve-follow-symlinks` to also follow symlinks to directories. Use `--upload-skip-symlinks` to skip symlinked files entirely.
+
+<Note>
+If you need to preserve a directory structure containing symlinks, create a tar archive first and upload the archive as a single artifact.
+</Note>
+
+## Download
+
+```
+buildkite-agent artifact download [options] <query> <destination>
+```
+
+Downloads artifacts matching `<query>` from a build to the local `<destination>` directory. By default the query targets the current build; use `--build` to target a different build by its ID.
+
+```bash
+# Download all .tar.gz files from the current build to the current directory
+buildkite-agent artifact download "dist/*.tar.gz" .
+
+# Download from a specific build
+buildkite-agent artifact download "dist/*.tar.gz" . --build "$OTHER_BUILD_ID"
+
+# Download only artifacts produced by a specific step
+buildkite-agent artifact download "dist/*.tar.gz" . --step "build" --build "$BUILDKITE_BUILD_ID"
+```
+
+### Destination path behaviour
+
+If the last component of `<destination>` matches the first component of `<query>`, that last component is stripped from the final path. For example:
+
+```bash
+# With query "app/logs/*" and destination "foo/app":
+# Artifacts are written to foo/app/logs/ (not foo/app/app/logs/)
+buildkite-agent artifact download "app/logs/*" foo/app
+```
+
+To always recreate the full artifact directory hierarchy, change to the destination directory and use `.` as the destination:
+
+```bash
+cd /tmp/download-dir
+buildkite-agent artifact download "app/logs/*" .
+```
+
+### Download flags
+
+| Flag | Env var | Description |
+|------|---------|-------------|
+| `--build` | `BUILDKITE_BUILD_ID` | The build to download artifacts from. Required when downloading from a different build. |
+| `--step` | — | Restrict the download to artifacts produced by a specific step (name, label, or job ID). |
+| `--include-retried-jobs` | `BUILDKITE_AGENT_INCLUDE_RETRIED_JOBS` | Include artifacts from retried jobs in the search. |
+
+## Search
+
+```
+buildkite-agent artifact search [options] <query>
+```
+
+Searches for artifacts in a build without downloading them. Useful for inspecting what was uploaded or retrieving metadata such as job IDs, file sizes, and checksums.
+
+```bash
+# List all artifacts in the current build
+buildkite-agent artifact search "*" --build "$BUILDKITE_BUILD_ID"
+
+# Find a specific artifact and print its path and size
+buildkite-agent artifact search "dist/my-app.tar.gz" \
+  --build "$BUILDKITE_BUILD_ID" \
+  --format "%p %s\n"
+```
+
+### Format specifiers
+
+| Specifier | Value |
+|-----------|-------|
+| `%i` | UUID of the artifact |
+| `%p` | Artifact path |
+| `%c` | Creation time (ISO 8601 / RFC-3339 UTC) |
+| `%j` | UUID of the job that uploaded the artifact |
+| `%s` | File size in bytes |
+| `%S` | SHA-1 checksum |
+| `%T` | SHA-256 checksum |
+| `%u` | Download URL |
+
+The default format is `%j %p %c\n`.
+
+### Search flags
+
+| Flag | Env var | Description |
+|------|---------|-------------|
+| `--build` | `BUILDKITE_BUILD_ID` | The build to search. Required. |
+| `--step` | — | Restrict the search to a specific step. |
+| `--include-retried-jobs` | `BUILDKITE_AGENT_INCLUDE_RETRIED_JOBS` | Include artifacts from retried jobs. |
+| `--allow-empty-results` | — | Exit with code 0 when no artifacts match instead of code 1. |
+| `--format` | — | Output format string using the specifiers above. |
+
+## Verify checksums with `shasum`
+
+```
+buildkite-agent artifact shasum [options] <query>
+```
+
+Retrieves the SHA-1 or SHA-256 checksum for a single artifact. The checksum is computed by the agent at upload time and stored in the Buildkite API — it is not recalculated on demand. The query must match exactly one artifact.
+
+```bash
+# Print the SHA-1 hash of an artifact
+buildkite-agent artifact shasum "dist/my-app.tar.gz" --build "$BUILDKITE_BUILD_ID"
+
+# Request SHA-256 instead
+buildkite-agent artifact shasum "dist/my-app.tar.gz" \
+  --build "$BUILDKITE_BUILD_ID" \
+  --sha256
+
+# Scope to a specific step
+buildkite-agent artifact shasum "dist/my-app.tar.gz" \
+  --step "build" \
+  --build "$BUILDKITE_BUILD_ID"
+```
+
+<Note>
+SHA-256 checksums are only available for artifacts uploaded with a version of the agent that included SHA-256 support. If you request `--sha256` for an older artifact, the command will return an error.
+</Note>
+
+## Cross-step artifact access
+
+Artifacts uploaded by one step are immediately available to all subsequent steps in the same build. Use `$BUILDKITE_BUILD_ID` (automatically set by the agent) to reference the current build without hardcoding:
+
+```bash
+# In step "build"
+buildkite-agent artifact upload "dist/my-app.tar.gz"
+
+# In step "deploy" (runs after "build")
+buildkite-agent artifact download "dist/my-app.tar.gz" . \
+  --build "$BUILDKITE_BUILD_ID"
+```
+
+To download artifacts from a completely different build (e.g. a previous release build), pass that build's ID explicitly:
+
+```bash
+buildkite-agent artifact download "dist/my-app.tar.gz" . \
+  --build "01234567-89ab-cdef-0123-456789abcdef"
+```
+
+## Glob patterns and path normalisation
+
+The agent uses Unix-style glob patterns (`**` for recursive matching) regardless of the host platform. On Windows hosts, path separators in artifact names are preserved as backslashes by default, which can produce non-URI-compatible artifact paths.
+
+Enable the [`normalised-upload-paths`](/guides/experiments#normalised-upload-paths) experiment to normalise artifact paths to forward slashes even on Windows, ensuring URI-compatible artifact names across all platforms.
+
+```bash
+# Without normalised-upload-paths (Windows default):
+# coverage\report.xml → s3://bucket/coverage\report.xml
+
+# With normalised-upload-paths:
+# coverage\report.xml → s3://bucket/coverage/report.xml
+buildkite-agent start --experiment normalised-upload-paths ...
+```

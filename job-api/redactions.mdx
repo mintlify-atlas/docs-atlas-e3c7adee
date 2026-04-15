@@ -1,0 +1,104 @@
+---
+title: "Job API redactions endpoint — POST"
+description: "POST /api/current-job/v0/redactions adds a string to the agent's live redaction list, ensuring it is masked in all subsequent log output for the current job."
+---
+
+The redactions endpoint lets a running job register a string value with the agent's live redaction engine. Once registered, the agent replaces every occurrence of that string with `[REDACTED]` in all subsequent log output for the current job. This is particularly useful when your job fetches secrets dynamically at runtime — for example, from a vault or secrets manager — and those secrets are not known to the agent at job startup.
+
+<Warning>
+Redaction is one-way and permanent for the job's lifetime. There is no endpoint to remove a string from the redaction list once it has been added. Plan redactions carefully: register a value as soon as you fetch it, before you use it in a command that might log it.
+</Warning>
+
+---
+
+## POST /api/current-job/v0/redactions
+
+Adds a single string to the agent's live redaction list. The agent begins masking that string in log output immediately after the request completes. The endpoint returns a `201 Created` response with the redacted string echoed back.
+
+### Request body
+
+<ParamField body="redact" type="string" required>
+  The exact string to add to the redaction list. The agent performs a literal string match — regular expressions and glob patterns are not supported. An empty string is accepted but has no practical effect.
+</ParamField>
+
+### Response
+
+The response status is `201 Created`.
+
+<ResponseField name="redacted" type="string" required>
+  The string that was added to the redaction list, echoed back from the request body. Use this to confirm which value was registered.
+</ResponseField>
+
+### Example
+
+<CodeGroup>
+
+```bash Request
+SECRET=$(fetch-my-secret)  # some command that retrieves a secret
+
+curl --unix-socket "$BUILDKITE_AGENT_JOB_API_SOCKET" \
+  --request POST \
+  --header "Authorization: Bearer $BUILDKITE_AGENT_JOB_API_TOKEN" \
+  --header "Content-Type: application/json" \
+  --data "{\"redact\": \"$SECRET\"}" \
+  http://job/api/current-job/v0/redactions
+```
+
+```json Response (201 Created)
+{
+  "redacted": "s3cr3t-value"
+}
+```
+
+</CodeGroup>
+
+---
+
+## Combining redaction with environment injection
+
+A common pattern is to fetch a secret, register it for redaction, and then expose it as an environment variable — all before any step uses it:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+# 1. Fetch the secret from an external source.
+MY_SECRET=$(some-vault-cli read secret/my-service/token)
+
+# 2. Register it with the Job API so it's masked in logs.
+curl --silent --unix-socket "$BUILDKITE_AGENT_JOB_API_SOCKET" \
+  --request POST \
+  --header "Authorization: Bearer $BUILDKITE_AGENT_JOB_API_TOKEN" \
+  --header "Content-Type: application/json" \
+  --data "{\"redact\": \"$MY_SECRET\"}" \
+  http://job/api/current-job/v0/redactions
+
+# 3. Inject it into the job environment so subsequent steps can use it.
+curl --silent --unix-socket "$BUILDKITE_AGENT_JOB_API_SOCKET" \
+  --request PATCH \
+  --header "Authorization: Bearer $BUILDKITE_AGENT_JOB_API_TOKEN" \
+  --header "Content-Type: application/json" \
+  --data "{\"env\": {\"MY_SECRET\": \"$MY_SECRET\"}}" \
+  http://job/api/current-job/v0/env
+```
+
+After these calls, `MY_SECRET` is available as an environment variable in subsequent steps, and its value is masked in all log output.
+
+<Note>
+If you are using the `buildkite-agent` CLI, the `buildkite-agent secret get` command handles fetching, redacting, and injecting secrets in a single step. The manual `curl` approach above is useful when you need finer control or are calling the API from a non-shell context.
+</Note>
+
+---
+
+## Common error responses
+
+All error responses use the same JSON shape:
+
+<ResponseField name="error" type="string" required>
+  A human-readable description of what went wrong.
+</ResponseField>
+
+| Status | Cause |
+|---|---|
+| `400 Bad Request` | Request body is not valid JSON or is missing required fields. |
+| `401 Unauthorized` | Missing, malformed, or invalid bearer token. |

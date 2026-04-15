@@ -1,0 +1,114 @@
+---
+title: "Run the Buildkite Agent with Docker"
+description: "Deploy the Buildkite Agent with official Docker images for Alpine and Ubuntu. Covers image tags, environment variables, volume mounts, and Docker Compose."
+---
+
+The Buildkite Agent is published as an official Docker image on Docker Hub at [`buildkite/agent`](https://hub.docker.com/r/buildkite/agent). Each image bundles the agent binary with a supported operating system, making it straightforward to run agents in containerised environments without a separate installation step.
+
+## Available images
+
+Images are tagged using the agent's SemVer components combined with the operating system name. For example, agent version `3.45.6` is published under the following tags for Ubuntu 22.04:
+
+| Tag | Tracks |
+|-----|--------|
+| `3-ubuntu-22.04` | Latest minor and patch in the v3 series |
+| `3.45-ubuntu-22.04` | Latest patch in the 3.45 series |
+| `3.45.6-ubuntu-22.04` | Exact version, no automatic updates |
+
+### Supported operating systems
+
+- **Alpine 3.18** — smallest image, good for constrained environments
+- **Ubuntu 20.04 LTS** (x86\_64) — supported to end of Ubuntu standard support
+- **Ubuntu 22.04 LTS** (x86\_64) — supported to end of Ubuntu standard support
+- **Ubuntu 24.04 LTS** (x86\_64) — supported to end of Ubuntu standard support
+
+<Tip>
+Pin to a patch-level tag (e.g. `3.45.6-ubuntu-22.04`) in production to ensure reproducible behaviour. Use the minor-level tag (e.g. `3.45-ubuntu-22.04`) if you want bug fixes applied automatically.
+</Tip>
+
+## Basic docker run
+
+The minimal `docker run` invocation requires an agent token and a writable build path. The build path is where the agent checks out repositories and runs jobs — mount it from the host so that jobs can write to persistent storage.
+
+```bash
+docker run \
+  --rm \
+  -e BUILDKITE_AGENT_TOKEN="your-agent-token" \
+  -v /tmp/buildkite-builds:/buildkite/builds \
+  buildkite/agent:3-ubuntu-22.04
+```
+
+## Environment variables
+
+All agent configuration flags have a corresponding environment variable. Pass these to `docker run` with `-e` or populate them via an env file.
+
+| Environment variable | Description |
+|----------------------|-------------|
+| `BUILDKITE_AGENT_TOKEN` | **Required.** Agent registration token from your Buildkite organisation. |
+| `BUILDKITE_AGENT_NAME` | Name shown in the Buildkite UI. Defaults to the hostname. |
+| `BUILDKITE_AGENT_TAGS` | Comma-separated list of tags, e.g. `queue=docker,os=linux`. |
+| `BUILDKITE_BUILD_PATH` | Where the agent stores build checkouts. |
+| `BUILDKITE_HOOKS_PATH` | Directory containing agent hooks. |
+| `BUILDKITE_PLUGINS_PATH` | Directory where plugins are installed. |
+| `BUILDKITE_AGENT_QUEUE` | Queue name the agent listens on. |
+| `BUILDKITE_NO_PTY` | Set to `true` to disable pseudo-terminal allocation (useful in some container runtimes). |
+| `BUILDKITE_WRITE_JOB_LOGS_TO_STDOUT` | Set to `true` to write job output to the agent's stdout, simplifying log collection. |
+
+## Volume mounts
+
+| Mount point | Purpose |
+|-------------|---------|
+| `/buildkite/builds` | Build checkout directory — should be host-mounted for persistence. |
+| `/buildkite/hooks` | Agent-level hooks directory, mounted read-only from the host. |
+| `/buildkite/sockets` | Unix sockets directory, required when running multiple agents or using the `agent-api` experiment. |
+
+## Docker Compose example
+
+Using Docker Compose makes it easier to manage configuration, volumes, and multiple agent replicas.
+
+<CodeGroup>
+```yaml docker-compose.yml
+services:
+  buildkite-agent:
+    image: buildkite/agent:3-ubuntu-22.04
+    environment:
+      BUILDKITE_AGENT_TOKEN: "${BUILDKITE_AGENT_TOKEN}"
+      BUILDKITE_AGENT_TAGS: "queue=docker,os=linux"
+      BUILDKITE_BUILD_PATH: /buildkite/builds
+      BUILDKITE_HOOKS_PATH: /buildkite/hooks
+      BUILDKITE_WRITE_JOB_LOGS_TO_STDOUT: "true"
+    volumes:
+      - ./builds:/buildkite/builds
+      - ./hooks:/buildkite/hooks:ro
+    restart: unless-stopped
+    deploy:
+      replicas: 4
+```
+
+```bash .env
+BUILDKITE_AGENT_TOKEN=your-agent-token-here
+```
+</CodeGroup>
+
+Start the agents:
+
+```bash
+docker compose up -d
+```
+
+## Running steps that need Docker (Docker-in-Docker)
+
+If your pipeline steps themselves need to run Docker commands, you have two main options:
+
+**Bind-mount the host Docker socket** — simplest approach, but gives containers full access to the host Docker daemon:
+
+```yaml
+volumes:
+  - /var/run/docker.sock:/var/run/docker.sock
+```
+
+**Use a Docker-in-Docker sidecar** — runs a separate `docker:dind` service, providing stronger isolation at the cost of complexity. Requires the agent container to set `DOCKER_HOST` to point at the sidecar.
+
+<Warning>
+Mounting the host Docker socket grants the agent container root-equivalent access to the host. Only use this approach in environments where you trust the pipeline code being executed.
+</Warning>

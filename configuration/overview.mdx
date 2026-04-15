@@ -1,0 +1,166 @@
+---
+title: "Agent configuration overview"
+description: "Configure the Buildkite Agent with CLI flags, environment variables, or a config file. Covers build paths, shell, concurrency, queues, tags, and more."
+---
+
+The Buildkite Agent can be configured in three complementary ways: CLI flags passed to `buildkite-agent start`, environment variables that mirror each flag, and a configuration file (`buildkite-agent.cfg`) that persists settings across restarts. All three methods can be combined, with CLI flags taking the highest precedence, followed by environment variables, and then the configuration file.
+
+## Configuration methods
+
+### CLI flags
+
+Pass flags directly to `buildkite-agent start`. This is useful for one-off overrides or container environments where environment variables are already set.
+
+```bash
+buildkite-agent start \
+  --token "your-agent-token" \
+  --build-path "/var/buildkite/builds" \
+  --hooks-path "/etc/buildkite-agent/hooks" \
+  --spawn 4 \
+  --tags "os=linux,queue=default"
+```
+
+### Environment variables
+
+Every CLI flag has a matching `BUILDKITE_*` environment variable. Set these in your shell profile, systemd unit file, or container environment. See the [environment variables reference](/configuration/environment-variables) for the full list.
+
+```bash
+export BUILDKITE_AGENT_TOKEN="your-agent-token"
+export BUILDKITE_BUILD_PATH="/var/buildkite/builds"
+export BUILDKITE_AGENT_TAGS="os=linux,queue=default"
+```
+
+### Configuration file
+
+The `buildkite-agent.cfg` file uses a simple `key=value` format (one setting per line, `#` for comments). The agent reads the first config file it finds from the default search paths, or you can specify a custom path with `--config` / `BUILDKITE_AGENT_CONFIG`.
+
+<Tabs>
+  <Tab title="Linux">
+    Default config file path on Linux:
+
+    ```
+    /etc/buildkite-agent/buildkite-agent.cfg
+    ```
+
+    The agent also checks `$HOME/.buildkite-agent/buildkite-agent.cfg` before the system-wide path.
+  </Tab>
+  <Tab title="macOS">
+    Default config file paths on macOS (checked in order):
+
+    ```
+    $HOME/.buildkite-agent/buildkite-agent.cfg
+    /opt/homebrew/etc/buildkite-agent/buildkite-agent.cfg   # Apple Silicon
+    /usr/local/etc/buildkite-agent/buildkite-agent.cfg
+    /etc/buildkite-agent/buildkite-agent.cfg
+    ```
+  </Tab>
+  <Tab title="Windows">
+    Default config file paths on Windows (checked in order):
+
+    ```
+    C:\buildkite-agent\buildkite-agent.cfg
+    %USERPROFILE%\AppData\Local\buildkite-agent\buildkite-agent.cfg
+    %USERPROFILE%\AppData\Local\BuildkiteAgent\buildkite-agent.cfg
+    ```
+  </Tab>
+</Tabs>
+
+<Note>
+  The agent also checks for a `buildkite-agent.cfg` file in the same directory as the agent binary, and this path takes precedence over all other default locations.
+</Note>
+
+## Example configuration file
+
+```ini
+# Required: your agent registration token
+token="your-agent-token"
+
+# Where builds are checked out and run
+build-path="/var/buildkite/builds"
+
+# Where global hook scripts are stored
+hooks-path="/etc/buildkite-agent/hooks"
+
+# Where plugins are cached after cloning
+plugins-path="/var/buildkite/plugins"
+
+# Shell used to run build commands
+shell="/bin/bash -e -c"
+
+# Number of parallel agents to spawn (one process, N workers)
+spawn=4
+
+# Tags used for job targeting
+tags="os=linux,arch=amd64,queue=default"
+
+# Disconnect after running a single job (useful in ephemeral environments)
+# disconnect-after-job=true
+```
+
+## Key configuration categories
+
+<AccordionGroup>
+  <Accordion title="Identity and registration">
+    | Flag | Env var | Description |
+    |------|---------|-------------|
+    | `--token` | `BUILDKITE_AGENT_TOKEN` | Agent registration token (required) |
+    | `--name` | `BUILDKITE_AGENT_NAME` | Display name for this agent |
+    | `--priority` | `BUILDKITE_AGENT_PRIORITY` | Job assignment priority (higher = first) |
+    | `--queue` | `BUILDKITE_AGENT_QUEUE` | Queue the agent listens to |
+    | `--tags` | `BUILDKITE_AGENT_TAGS` | Comma-separated key=value tags |
+  </Accordion>
+
+  <Accordion title="File system paths">
+    | Flag | Env var | Description |
+    |------|---------|-------------|
+    | `--build-path` | `BUILDKITE_BUILD_PATH` | Where builds are checked out (required) |
+    | `--hooks-path` | `BUILDKITE_HOOKS_PATH` | Directory for global hook scripts |
+    | `--plugins-path` | `BUILDKITE_PLUGINS_PATH` | Directory where plugins are cached |
+    | `--additional-hooks-paths` | `BUILDKITE_ADDITIONAL_HOOKS_PATHS` | Additional hook directories |
+  </Accordion>
+
+  <Accordion title="Concurrency and lifecycle">
+    | Flag | Env var | Description |
+    |------|---------|-------------|
+    | `--spawn` | `BUILDKITE_AGENT_SPAWN` | Number of parallel worker agents to start |
+    | `--spawn-per-cpu` | `BUILDKITE_AGENT_SPAWN_PER_CPU` | Workers per CPU core (mutually exclusive with `--spawn`) |
+    | `--disconnect-after-job` | `BUILDKITE_AGENT_DISCONNECT_AFTER_JOB` | Shut down after running one job |
+    | `--disconnect-after-idle-timeout` | `BUILDKITE_AGENT_DISCONNECT_AFTER_IDLE_TIMEOUT` | Shut down after N seconds idle |
+    | `--disconnect-after-uptime` | `BUILDKITE_AGENT_DISCONNECT_AFTER_UPTIME` | Shut down after N seconds of uptime |
+  </Accordion>
+
+  <Accordion title="Shell and execution">
+    | Flag | Env var | Description |
+    |------|---------|-------------|
+    | `--shell` | `BUILDKITE_SHELL` | Shell command used to run build steps |
+    | `--hooks-shell` | `BUILDKITE_HOOKS_SHELL` | Shell command used to run hook scripts |
+    | `--no-pty` | `BUILDKITE_NO_PTY` | Disable pseudo-terminal for job execution |
+    | `--no-command-eval` | `BUILDKITE_NO_COMMAND_EVAL` | Prevent arbitrary command execution |
+  </Accordion>
+
+  <Accordion title="Security">
+    | Flag | Env var | Description |
+    |------|---------|-------------|
+    | `--no-local-hooks` | `BUILDKITE_NO_LOCAL_HOOKS` | Disallow hooks from the checked-out repo |
+    | `--no-plugins` | `BUILDKITE_NO_PLUGINS` | Disallow all plugins |
+    | `--allowed-plugins` | `BUILDKITE_ALLOWED_PLUGINS` | Regex allowlist for permitted plugins |
+    | `--allowed-repositories` | `BUILDKITE_ALLOWED_REPOSITORIES` | Regex allowlist for cloneable repositories |
+    | `--no-ssh-keyscan` | `BUILDKITE_NO_SSH_KEYSCAN` | Disable automatic SSH host key scanning |
+  </Accordion>
+
+  <Accordion title="Git behaviour">
+    | Flag | Env var | Description |
+    |------|---------|-------------|
+    | `--git-clone-flags` | `BUILDKITE_GIT_CLONE_FLAGS` | Extra flags passed to `git clone` (default: `-v`) |
+    | `--git-fetch-flags` | `BUILDKITE_GIT_FETCH_FLAGS` | Extra flags passed to `git fetch` (default: `-v --prune`) |
+    | `--git-clean-flags` | `BUILDKITE_GIT_CLEAN_FLAGS` | Extra flags passed to `git clean` (default: `-ffxdq`) |
+    | `--git-checkout-flags` | `BUILDKITE_GIT_CHECKOUT_FLAGS` | Extra flags passed to `git checkout` (default: `-f`) |
+    | `--no-git-submodules` | `BUILDKITE_NO_GIT_SUBMODULES` | Skip automatic submodule checkout |
+  </Accordion>
+</AccordionGroup>
+
+## Related pages
+
+- [Environment variables reference](/configuration/environment-variables) — full list of `BUILDKITE_*` variables
+- [Hooks](/configuration/hooks) — customise the job lifecycle with shell scripts
+- [Plugins](/configuration/plugins) — extend the agent with reusable plugin packages

@@ -1,0 +1,259 @@
+---
+title: "buildkite-agent artifact — upload and download artifacts"
+description: "Upload files to Buildkite or custom storage, download them by glob query, search artifact metadata, and verify checksums from within a job."
+---
+
+`buildkite-agent artifact` provides four subcommands for managing build artifacts. Files can be uploaded to Buildkite-managed S3 (retained for six months), or redirected to your own Amazon S3, Google Cloud Storage, or Artifactory bucket. All subcommands require `BUILDKITE_AGENT_ACCESS_TOKEN` and `BUILDKITE_BUILD_ID` to be set, which are automatically available inside a running Buildkite job.
+
+## Subcommands
+
+| Subcommand | Description |
+|---|---|
+| `upload` | Upload files matching a glob pattern |
+| `download` | Download artifacts to a local directory |
+| `search` | Search artifact metadata and print results |
+| `shasum` | Print the SHA-1 or SHA-256 hash for a single artifact |
+
+---
+
+## upload
+
+Uploads files matching `<pattern>` to the current job as artifacts. Quote the pattern to prevent shell globbing from expanding it before the agent can.
+
+```bash
+buildkite-agent artifact upload [options] <pattern> [destination]
+```
+
+<ParamField path="<pattern>" type="string" required>
+  Glob pattern of files to upload, e.g. `"log/**/*.log"`. Separate multiple patterns with `;` (configurable via `--delimiter`).
+</ParamField>
+
+<ParamField path="[destination]" type="string">
+  Upload destination URI. Supported schemes: `s3://`, `gs://`, `rt://`. Falls back to `BUILDKITE_ARTIFACT_UPLOAD_DESTINATION`. If omitted, files are uploaded to Buildkite-managed storage.
+</ParamField>
+
+<ParamField path="--job" type="string">
+  Job ID to upload artifacts to. Defaults to `BUILDKITE_JOB_ID`.
+</ParamField>
+
+<ParamField path="--content-type" type="string">
+  Force a specific `Content-Type` header. Auto-detected from the file extension when omitted. Environment variable: `BUILDKITE_ARTIFACT_CONTENT_TYPE`
+</ParamField>
+
+<ParamField path="--literal" type="bool">
+  Treat each upload path as a literal file path rather than a glob pattern. Default: `false`. Environment variable: `BUILDKITE_AGENT_ARTIFACT_LITERAL`
+</ParamField>
+
+<ParamField path="--delimiter" type="string">
+  Character used to split the upload paths into multiple patterns. Default: `;`. Set to empty string to disable splitting. Environment variable: `BUILDKITE_AGENT_ARTIFACT_DELIMITER`
+</ParamField>
+
+<ParamField path="--glob-resolve-follow-symlinks" type="bool">
+  Follow symbolic links to directories when resolving globs. Does not affect symlinks to files. Default: `false`. Environment variable: `BUILDKITE_AGENT_ARTIFACT_GLOB_RESOLVE_FOLLOW_SYMLINKS`
+</ParamField>
+
+<ParamField path="--upload-skip-symlinks" type="bool">
+  After glob resolution, skip uploading files that are symlinks. Default: `false`. Environment variable: `BUILDKITE_ARTIFACT_UPLOAD_SKIP_SYMLINKS`
+</ParamField>
+
+<ParamField path="--no-multipart-artifact-upload" type="bool">
+  Disable multipart uploads for Buildkite-hosted artifacts. Has no effect on custom destinations. Default: `false`. Environment variable: `BUILDKITE_NO_MULTIPART_ARTIFACT_UPLOAD`
+</ParamField>
+
+### Examples
+
+<CodeGroup>
+
+```bash Upload logs
+buildkite-agent artifact upload "log/**/*.log"
+```
+
+```bash Upload to S3
+export BUILDKITE_S3_ACCESS_KEY_ID=xxx
+export BUILDKITE_S3_SECRET_ACCESS_KEY=yyy
+export BUILDKITE_S3_DEFAULT_REGION=eu-central-1
+buildkite-agent artifact upload "dist/*.tar.gz" \
+  s3://my-bucket/$BUILDKITE_JOB_ID
+```
+
+```bash Upload to GCS
+export BUILDKITE_GS_ACL=private
+buildkite-agent artifact upload "dist/*.tar.gz" \
+  gs://my-bucket/$BUILDKITE_JOB_ID
+```
+
+```bash Upload to Artifactory
+export BUILDKITE_ARTIFACTORY_URL=https://my-instance.com/artifactory
+export BUILDKITE_ARTIFACTORY_USER=carol-danvers
+export BUILDKITE_ARTIFACTORY_PASSWORD=xxx
+buildkite-agent artifact upload "dist/*.tar.gz" \
+  rt://my-repo/$BUILDKITE_JOB_ID
+```
+
+</CodeGroup>
+
+---
+
+## download
+
+Downloads artifacts matching `<query>` from a build to a local `<destination>` directory.
+
+```bash
+buildkite-agent artifact download [options] <query> <destination>
+```
+
+<ParamField path="<query>" type="string" required>
+  Glob query to match artifact paths, e.g. `"pkg/*.tar.gz"`. Quote the pattern to prevent shell expansion.
+</ParamField>
+
+<ParamField path="<destination>" type="string" required>
+  Local directory to write downloaded files into. Use `.` to replicate the artifact directory hierarchy under the current working directory.
+</ParamField>
+
+<ParamField path="--build" type="string" required>
+  The build ID to search for artifacts. Defaults to `BUILDKITE_BUILD_ID`. Environment variable: `BUILDKITE_BUILD_ID`
+</ParamField>
+
+<ParamField path="--step" type="string">
+  Scope the search to a particular step by its key, label, or Job ID.
+</ParamField>
+
+<ParamField path="--include-retried-jobs" type="bool">
+  Include artifacts from retried jobs in the search. Default: `false`. Environment variable: `BUILDKITE_AGENT_INCLUDE_RETRIED_JOBS`
+</ParamField>
+
+### Examples
+
+<CodeGroup>
+
+```bash Download all tarballs
+buildkite-agent artifact download "pkg/*.tar.gz" . \
+  --build "$BUILDKITE_BUILD_ID"
+```
+
+```bash Download from a specific step
+buildkite-agent artifact download "pkg/*.tar.gz" ./dist \
+  --step "build" \
+  --build "$BUILDKITE_BUILD_ID"
+```
+
+</CodeGroup>
+
+<Note>
+  If the last path component of `<destination>` matches the first path component
+  of `<query>`, the duplicate segment is dropped. For example, a query of
+  `app/logs/*` with a destination of `foo/app` writes files to `foo/app/logs/`.
+</Note>
+
+---
+
+## search
+
+Searches for artifacts and prints metadata about each match to stdout. The default output format is `%j %p %c\n` (job UUID, path, created-at timestamp).
+
+```bash
+buildkite-agent artifact search [options] <query>
+```
+
+<ParamField path="<query>" type="string" required>
+  Glob query to match artifact paths.
+</ParamField>
+
+<ParamField path="--build" type="string" required>
+  The build ID to search. Defaults to `BUILDKITE_BUILD_ID`.
+</ParamField>
+
+<ParamField path="--step" type="string">
+  Scope results to a particular step by name or Job ID.
+</ParamField>
+
+<ParamField path="--format" type="string">
+  Printf-style format string controlling output. Default: `%j %p %c\n`. See format specifiers below.
+</ParamField>
+
+<ParamField path="--include-retried-jobs" type="bool">
+  Include artifacts from retried jobs. Default: `false`.
+</ParamField>
+
+<ParamField path="--allow-empty-results" type="bool">
+  Exit `0` when no artifacts match instead of exiting `1`. Default: `false`.
+</ParamField>
+
+**Format specifiers:**
+
+| Specifier | Description |
+|---|---|
+| `%i` | Artifact UUID |
+| `%p` | Artifact path |
+| `%c` | Creation time (RFC-3339 UTC) |
+| `%j` | Job UUID that uploaded the artifact |
+| `%s` | File size in bytes |
+| `%S` | SHA-1 checksum |
+| `%T` | SHA-256 checksum |
+| `%u` | Download URL |
+
+### Examples
+
+<CodeGroup>
+
+```bash Search and print paths only
+buildkite-agent artifact search "*" \
+  --format "%p\n" \
+  --build "$BUILDKITE_BUILD_ID"
+```
+
+```bash Search within a step
+buildkite-agent artifact search "pkg/*.tar.gz" \
+  --step "build" \
+  --build "$BUILDKITE_BUILD_ID"
+```
+
+</CodeGroup>
+
+---
+
+## shasum
+
+Prints the SHA-1 or SHA-256 hash of the single artifact matched by `<query>`. The query must match exactly one artifact or the command exits with an error.
+
+```bash
+buildkite-agent artifact shasum [options] <query>
+```
+
+<ParamField path="<query>" type="string" required>
+  Glob query that must match exactly one artifact.
+</ParamField>
+
+<ParamField path="--build" type="string" required>
+  The build ID to search. Defaults to `BUILDKITE_BUILD_ID`.
+</ParamField>
+
+<ParamField path="--sha256" type="bool">
+  Request SHA-256 instead of SHA-1. Errors if SHA-256 was not generated at upload time. Default: `false`.
+</ParamField>
+
+<ParamField path="--step" type="string">
+  Scope the search to a particular step.
+</ParamField>
+
+<ParamField path="--include-retried-jobs" type="bool">
+  Include artifacts from retried jobs. Default: `false`.
+</ParamField>
+
+### Examples
+
+<CodeGroup>
+
+```bash SHA-1 hash
+buildkite-agent artifact shasum "pkg/release.tar.gz" \
+  --build "$BUILDKITE_BUILD_ID"
+```
+
+```bash SHA-256 hash from a specific step
+buildkite-agent artifact shasum "pkg/release.tar.gz" \
+  --sha256 \
+  --step "release" \
+  --build "$BUILDKITE_BUILD_ID"
+```
+
+</CodeGroup>

@@ -1,0 +1,231 @@
+---
+title: "Buildkite Agent plugins"
+description: "Install and configure Buildkite Agent plugins to add reusable build steps. Plugins are loaded from Git repositories or zip archives and run as hooks."
+---
+
+Plugins extend the Buildkite Agent with reusable functionality packaged as Git repositories. Each plugin provides one or more hook scripts (using the same hook names as agent hooks) and an optional `plugin.yml` / `plugin.json` definition file that describes its name, configuration schema, and system requirements. The agent clones or fetches plugins at job runtime, runs their hooks at the appropriate lifecycle points, and caches them for subsequent jobs.
+
+## How plugins work
+
+When a job is dispatched with a `plugins` block, the agent:
+
+1. Resolves each plugin location (a GitHub/Bitbucket/GitLab URL, a full `https://` URL, or a local filesystem path).
+2. Clones the plugin repository at the specified version (a Git tag, branch, or commit SHA) into `BUILDKITE_PLUGINS_PATH`.
+3. Validates the plugin's `plugin.yml` configuration against the provided settings (unless validation is disabled).
+4. Injects the plugin's configuration as `BUILDKITE_PLUGIN_<NAME>_*` environment variables.
+5. Runs the plugin's hook scripts at each lifecycle point (e.g. `pre-checkout`, `command`, `post-command`).
+
+Plugin hooks run at the same lifecycle points as agent and local hooks. The execution order within each phase is: **global agent hook → local repo hook → plugin hooks**.
+
+## Referencing plugins in pipeline YAML
+
+Plugins are declared in the `plugins` list of a pipeline step. Each entry is either a string (no configuration) or a map of `location: config`.
+
+<CodeGroup>
+
+```yaml Single plugin, no config
+steps:
+  - label: "Run tests"
+    command: "pytest"
+    plugins:
+      - docker#v5.11.0:
+          image: "python:3.12-slim"
+```
+
+```yaml Multiple plugins with config
+steps:
+  - label: "Build and push image"
+    plugins:
+      - docker-login#v2.1.0:
+          username: myuser
+          password-from: "DOCKER_PASSWORD"
+      - docker#v5.11.0:
+          image: "myorg/myapp"
+          push-tags: true
+```
+
+```yaml Plugin from a full HTTPS URL
+steps:
+  - label: "Custom plugin"
+    plugins:
+      - https://github.com/myorg/my-custom-buildkite-plugin#v1.2.3:
+          some-option: true
+```
+
+```yaml Vendored local plugin
+steps:
+  - label: "Local plugin"
+    plugins:
+      - ./.buildkite/plugins/my-local-plugin:
+          option: value
+```
+
+</CodeGroup>
+
+### Plugin location format
+
+The location string follows the pattern:
+
+```
+[scheme://]host/org/repo[#version]
+```
+
+- **Short form** — `org/repo#version` implies `github.com`, e.g. `docker#v5.11.0` expands to `github.com/buildkite-plugins/docker-buildkite-plugin#v5.11.0`.
+- **Full URL** — `github.com/myorg/my-plugin#v1.0.0` or `https://github.com/myorg/my-plugin#v1.0.0`.
+- **Local path** — A path starting with `.` is treated as a vendored plugin relative to the repository root.
+
+<Note>
+  The version fragment (`#v1.0.0`) should always be a pinned tag or commit SHA in production pipelines. Using a branch name is possible but means the plugin code can change without notice.
+</Note>
+
+## Plugin configuration
+
+Configuration values provided in the `plugins` block are converted to environment variables and passed to hook scripts. The naming convention is `BUILDKITE_PLUGIN_<PLUGIN_NAME>_<KEY>`:
+
+```yaml
+plugins:
+  - my-org/my-plugin#v1.0.0:
+      api-endpoint: "https://api.example.com"
+      retry-count: 3
+      features:
+        - caching
+        - metrics
+```
+
+The agent exposes these as:
+
+```bash
+BUILDKITE_PLUGIN_MY_PLUGIN_API_ENDPOINT="https://api.example.com"
+BUILDKITE_PLUGIN_MY_PLUGIN_RETRY_COUNT="3"
+BUILDKITE_PLUGIN_MY_PLUGIN_FEATURES_0="caching"
+BUILDKITE_PLUGIN_MY_PLUGIN_FEATURES_1="metrics"
+```
+
+The raw configuration JSON is also available in `BUILDKITE_PLUGIN_CONFIGURATION`.
+
+## Plugin definition file
+
+Every plugin should include a `plugin.yml` (or `plugin.yaml` / `plugin.json`) at its root. The agent uses this file to validate configuration and check system requirements before running hooks.
+
+```yaml
+name: my-plugin
+requirements:
+  - docker
+  - aws
+configuration:
+  properties:
+    image:
+      type: string
+    push-tags:
+      type: boolean
+  required:
+    - image
+  additionalProperties: false
+```
+
+| Field | Description |
+|-------|-------------|
+| `name` | Human-readable plugin name |
+| `requirements` | List of commands that must be present in `$PATH` |
+| `configuration` | JSON Schema that validates the plugin config block |
+
+## Plugin paths and caching
+
+Plugins are cached in the directory set by `BUILDKITE_PLUGINS_PATH`. Once cloned at a given version, the agent reuses the cached copy for subsequent jobs without re-cloning.
+
+```bash
+BUILDKITE_PLUGINS_PATH="/var/buildkite/plugins"
+```
+
+```ini
+# buildkite-agent.cfg
+plugins-path="/var/buildkite/plugins"
+```
+
+### Always clone fresh
+
+To force the agent to always clone a new copy of each plugin (ignoring the cache), set:
+
+```bash
+BUILDKITE_PLUGINS_ALWAYS_CLONE_FRESH=true
+```
+
+```ini
+# buildkite-agent.cfg
+plugins-always-clone-fresh=true
+```
+
+<Tip>
+  `plugins-always-clone-fresh` is useful during plugin development, but adds latency in production because every job re-clones all plugins. Prefer pinned version tags and let the cache work normally.
+</Tip>
+
+## Plugin validation and security
+
+### Plugin validation
+
+By default, plugin validation is **disabled** — the `no-plugin-validation` flag defaults to `true`, which skips checking that required commands are in `$PATH` and that the configuration matches the plugin's JSON Schema. To re-enable validation:
+
+```bash
+BUILDKITE_NO_PLUGIN_VALIDATION=false
+```
+
+```ini
+no-plugin-validation=false
+```
+
+<Note>
+  The `no-plugin-validation` flag defaults to `true` (validation off). Setting `BUILDKITE_NO_PLUGIN_VALIDATION=false` turns validation back on. This is a legacy default and may change in a future major release.
+</Note>
+
+### Allowlisting permitted plugins
+
+To restrict which plugins an agent is allowed to run, provide a list of regular expressions with `--allowed-plugins`. The agent refuses to load any plugin whose location does not match at least one pattern.
+
+```bash
+BUILDKITE_ALLOWED_PLUGINS="^buildkite-plugins/.*$,^myorg/.*$"
+```
+
+```ini
+# buildkite-agent.cfg
+allowed-plugins="^buildkite-plugins/.*$,^myorg/.*$"
+```
+
+### Disabling all plugins
+
+To prevent any plugin from loading on an agent:
+
+```bash
+BUILDKITE_NO_PLUGINS=true
+```
+
+```ini
+# buildkite-agent.cfg
+no-plugins=true
+```
+
+<Warning>
+  When `BUILDKITE_NO_COMMAND_EVAL=true` or `BUILDKITE_NO_LOCAL_HOOKS=true` is set, plugins are also disabled automatically unless `BUILDKITE_NO_PLUGINS=false` is explicitly provided. This is a safety measure, as plugins can execute arbitrary hooks.
+</Warning>
+
+## Zip archive plugins (experimental)
+
+The `zip-plugins` experiment allows the agent to download plugins as zip archives over HTTP/HTTPS instead of cloning a Git repository. This is useful when Git is unavailable or when plugins are hosted as release archives.
+
+Enable the experiment in your config file:
+
+```ini
+experiment="zip-plugins"
+```
+
+Reference a zip plugin using the `zip+https://` scheme:
+
+```yaml
+steps:
+  - plugins:
+      - zip+https://example.com/releases/my-plugin-v1.0.0.zip:
+          option: value
+```
+
+<Note>
+  Zip archive plugin support is experimental and subject to change. Use pinned URLs pointing to immutable archives in production.
+</Note>

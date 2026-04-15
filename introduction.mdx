@@ -1,0 +1,98 @@
+---
+title: "What is Buildkite Agent?"
+description: "Buildkite Agent is an open-source build runner that executes CI/CD jobs on your own infrastructure. Supports Linux, macOS, Windows, Docker, and Kubernetes."
+---
+
+The Buildkite Agent is a small, reliable, and cross-platform build runner that lets you run automated builds on any device or network you control. It polls Buildkite for work, runs build jobs inside a secure bootstrap environment, and streams logs and artifacts back to Buildkite in real time — all without exposing your infrastructure to the outside world.
+
+## What the agent does
+
+Once started, the agent continuously:
+
+1. **Registers** itself with Buildkite using your agent token
+2. **Polls** for scheduled jobs (or receives them via streaming dispatch)
+3. **Runs** each job in a bootstrap shell, checking out code and executing your pipeline steps
+4. **Streams** log output and uploads artifacts back to Buildkite
+5. **Reports** the final job exit status and moves on to the next job
+
+The agent is the only component that ever touches your infrastructure. Buildkite never reaches into your network — the agent always initiates outbound connections to `agent.buildkite.com`.
+
+## Architecture overview
+
+The agent process is structured in three layers:
+
+- **AgentPool** — the top-level process spawned by `buildkite-agent start`. It registers one or more worker identities with Buildkite and manages their lifecycle.
+- **AgentWorkers** — each worker owns a single connection to Buildkite. Workers ping for jobs independently, so multiple workers can run concurrent jobs on the same host.
+- **JobRunner** — when a worker accepts a job, it launches a `JobRunner` that executes the bootstrap script in a child process (or PTY when available), streams output line-by-line, and handles cancellation signals.
+
+You can control how many workers are spawned with `--spawn` (fixed count) or `--spawn-per-cpu` (one worker per logical CPU core).
+
+## Key capabilities
+
+<CardGroup cols={2}>
+  <Card title="Hooks" icon="hook" href="/configuration/hooks">
+    Run shell scripts at every stage of the job lifecycle — before checkout, after checkout, before command, after command, and more.
+  </Card>
+  <Card title="Plugins" icon="puzzle-piece" href="/configuration/plugins">
+    Extend jobs with reusable plugin steps loaded from Git repositories or zip archives.
+  </Card>
+  <Card title="Pipeline signing" icon="shield-halved" href="/security/pipeline-signing">
+    Sign pipeline definitions with JWKS keys or AWS/GCP KMS, and verify signatures before execution to prevent tampering.
+  </Card>
+  <Card title="Job API" icon="network-wired" href="/job-api/overview">
+    Inspect and mutate environment variables from within a running job using a local HTTP API exposed by the agent.
+  </Card>
+  <Card title="Distributed locking" icon="lock" href="/commands/lock">
+    Coordinate concurrent jobs across multiple agents using the built-in `buildkite-agent lock` subcommand.
+  </Card>
+  <Card title="Experiments" icon="flask" href="/guides/experiments">
+    Opt into experimental features like streaming job dispatch, PTY raw mode, and normalised upload paths.
+  </Card>
+</CardGroup>
+
+## Platform and OS support
+
+The agent binary is written in Go and runs on any platform Go supports. Official support tiers are:
+
+### Architecture support
+
+| Tier | Architectures |
+|------|--------------|
+| **Tier 1** — guaranteed to work | `linux/x86_64`, `linux/arm64`, `windows/x86_64` |
+| **Tier 2** — guaranteed to build | `linux/x86`, `windows/x86`, `darwin/x86_64`, `darwin/arm64` |
+| **Tier 3** — community supported | All other platforms where Go can compile |
+
+### Operating system support
+
+| OS | Supported versions |
+|----|-------------------|
+| **Ubuntu** | 20.04 and newer |
+| **Debian** | 8 and newer |
+| **Red Hat / RHEL** | 7 and newer |
+| **CentOS** | 7, 8 |
+| **Amazon Linux** | 2 |
+| **macOS** | 12 (Monterey), 13 (Ventura), 14 (Sonoma), 15 (Sequoia), 26 (Tahoe) |
+| **Windows** | 10, 11, Server 2016, Server 2019, Server 2022 |
+
+<Note>
+  Linux hosts require `dbus`. On all other supported platforms, the agent binary runs out of the box with no additional dependencies.
+</Note>
+
+### Docker images
+
+Official Docker images are published to [Docker Hub](https://hub.docker.com/r/buildkite/agent) for Alpine 3.18 and Ubuntu LTS (20.04, 22.04, 24.04). Images follow a `<version>-<os>` tag scheme. For example, agent `3.45.6` is available as:
+
+- `3-ubuntu-22.04` — tracks minor and patch updates in the `3.x` series
+- `3.45-ubuntu-22.04` — tracks patch updates in `3.45.x`
+- `3.45.6-ubuntu-22.04` — pins the exact agent version
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Install the agent" icon="download" href="/installation">
+    Install on Linux, macOS, Windows, or Docker.
+  </Card>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Start your first agent and run a test job in minutes.
+  </Card>
+</CardGroup>

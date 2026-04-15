@@ -1,0 +1,234 @@
+---
+title: "buildkite-agent lock — coordinate concurrent agent tasks"
+description: "Distributed locking primitives for coordinating concurrent work across multiple agent jobs on the same machine using acquire, release, do, done, and get."
+---
+
+`buildkite-agent lock` provides distributed locking primitives for use within Buildkite jobs. When multiple jobs run in parallel on the same machine, locks allow them to coordinate access to shared resources — such as a shared cache directory, a database migration, or a build artifact — without stepping on each other. Locks are managed by the agent leader process over a Unix socket, so all subcommands require at least one running agent with the `agent-api` experiment enabled.
+
+<Note>
+  The lock subcommands require the agent to be started with the `agent-api`
+  experiment enabled:
+
+  ```bash
+  buildkite-agent start --experiment agent-api ...
+  ```
+</Note>
+
+## Subcommands
+
+| Subcommand | Description |
+|---|---|
+| `acquire` | Acquire an exclusive lock, blocking until available |
+| `release` | Release a previously acquired lock |
+| `do` | Begin a do-once lock (returns `do` or `done`) |
+| `done` | Complete a do-once lock |
+| `get` | Inspect the current value of a lock key |
+
+---
+
+## acquire
+
+Acquires the lock for the given key. Blocks indefinitely until the lock is available. The output (a token) must be saved and passed to `lock release` to release the lock safely.
+
+```bash
+buildkite-agent lock acquire [key]
+```
+
+<ParamField path="[key]" type="string" required>
+  The lock key to acquire.
+</ParamField>
+
+<ParamField path="--lock-wait-timeout" type="duration">
+  Maximum duration to wait before giving up. Omit for no timeout. Environment variable: `BUILDKITE_LOCK_WAIT_TIMEOUT`
+</ParamField>
+
+<ParamField path="--lock-scope" type="string">
+  Scope of the lock. Currently only `machine` is supported. Default: `machine`. Environment variable: `BUILDKITE_LOCK_SCOPE`
+</ParamField>
+
+<ParamField path="--sockets-path" type="string">
+  Directory where the agent places its sockets. Environment variable: `BUILDKITE_SOCKETS_PATH`
+</ParamField>
+
+### Example
+
+```bash
+#!/usr/bin/env bash
+token=$(buildkite-agent lock acquire my-shared-cache)
+# --- critical section ---
+rsync -a ./build/ /shared/cache/
+# --- end critical section ---
+buildkite-agent lock release my-shared-cache "${token}"
+```
+
+---
+
+## release
+
+Releases a lock that was previously acquired. The token produced by `lock acquire` must be passed to prevent different processes accidentally releasing each other's locks.
+
+```bash
+buildkite-agent lock release [key] [token]
+```
+
+<ParamField path="[key]" type="string" required>
+  The lock key to release.
+</ParamField>
+
+<ParamField path="[token]" type="string" required>
+  The token returned by `lock acquire`.
+</ParamField>
+
+<ParamField path="--lock-scope" type="string">
+  Scope of the lock. Currently only `machine` is supported. Default: `machine`. Environment variable: `BUILDKITE_LOCK_SCOPE`
+</ParamField>
+
+<ParamField path="--sockets-path" type="string">
+  Directory where the agent places its sockets. Environment variable: `BUILDKITE_SOCKETS_PATH`
+</ParamField>
+
+### Example
+
+```bash
+#!/usr/bin/env bash
+token=$(buildkite-agent lock acquire my-db-migration)
+./scripts/migrate-database
+buildkite-agent lock release my-db-migration "${token}"
+```
+
+---
+
+## do
+
+Begins a do-once lock. Use this when multiple concurrent jobs need to share work where only one job should actually perform the work. Prints either `do` (this process should do the work) or `done` (the work was already completed by another process).
+
+```bash
+buildkite-agent lock do [key]
+```
+
+<ParamField path="[key]" type="string" required>
+  The do-once lock key.
+</ParamField>
+
+<ParamField path="--lock-wait-timeout" type="duration">
+  Maximum duration to wait before giving up. Omit for no timeout. Environment variable: `BUILDKITE_LOCK_WAIT_TIMEOUT`
+</ParamField>
+
+<ParamField path="--lock-scope" type="string">
+  Scope of the lock. Currently only `machine` is supported. Default: `machine`. Environment variable: `BUILDKITE_LOCK_SCOPE`
+</ParamField>
+
+<ParamField path="--sockets-path" type="string">
+  Directory where the agent places its sockets. Environment variable: `BUILDKITE_SOCKETS_PATH`
+</ParamField>
+
+### Behaviour
+
+- If the work has not yet been started, `lock do` prints `do` immediately. The calling process should do the work and then call `lock done`.
+- If another process is currently doing the work, `lock do` blocks until it calls `lock done`, then prints `done`.
+- If the work has already been completed, `lock do` prints `done` immediately.
+
+---
+
+## done
+
+Marks a do-once lock as complete. Only the process that received `do` from `lock do` should call this.
+
+```bash
+buildkite-agent lock done [key]
+```
+
+<ParamField path="[key]" type="string" required>
+  The do-once lock key to mark as complete.
+</ParamField>
+
+<ParamField path="--lock-scope" type="string">
+  Scope of the lock. Currently only `machine` is supported. Default: `machine`. Environment variable: `BUILDKITE_LOCK_SCOPE`
+</ParamField>
+
+<ParamField path="--sockets-path" type="string">
+  Directory where the agent places its sockets. Environment variable: `BUILDKITE_SOCKETS_PATH`
+</ParamField>
+
+### Example
+
+```bash
+#!/usr/bin/env bash
+if [[ $(buildkite-agent lock do database-seed) == "do" ]]; then
+  ./scripts/seed-test-database
+  buildkite-agent lock done database-seed
+fi
+# All processes continue here once seeding is complete
+```
+
+---
+
+## get
+
+Retrieves the current value of a lock key for inspection. Returns an empty string for keys not in use. This subcommand is intended for debugging — the value can change concurrently, so use `lock acquire` / `lock release` to coordinate access.
+
+```bash
+buildkite-agent lock get [key]
+```
+
+<ParamField path="[key]" type="string" required>
+  The lock key to inspect.
+</ParamField>
+
+<ParamField path="--lock-scope" type="string">
+  Scope of the lock. Currently only `machine` is supported. Default: `machine`. Environment variable: `BUILDKITE_LOCK_SCOPE`
+</ParamField>
+
+<ParamField path="--sockets-path" type="string">
+  Directory where the agent places its sockets. Environment variable: `BUILDKITE_SOCKETS_PATH`
+</ParamField>
+
+### Example
+
+```bash
+$ buildkite-agent lock get my-shared-cache
+Kuzco
+```
+
+## Common patterns
+
+<CodeGroup>
+
+```bash Mutual exclusion (acquire/release)
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Acquire the lock
+token=$(buildkite-agent lock acquire shared-cache)
+
+# --- critical section ---
+./scripts/update-shared-cache
+# --- end critical section ---
+
+# Release the lock
+buildkite-agent lock release shared-cache "${token}"
+```
+
+```bash Do-once (first job does the work, others wait)
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ $(buildkite-agent lock do install-deps) == "do" ]]; then
+  npm ci --cache /shared/.npm
+  buildkite-agent lock done install-deps
+fi
+# All jobs proceed with deps installed
+```
+
+</CodeGroup>
+
+<Tip>
+  Always release locks even if the critical section fails. Use `trap` in bash
+  to ensure cleanup:
+
+  ```bash
+  token=$(buildkite-agent lock acquire my-lock)
+  trap 'buildkite-agent lock release my-lock "${token}"' EXIT
+  # critical section...
+  ```
+</Tip>

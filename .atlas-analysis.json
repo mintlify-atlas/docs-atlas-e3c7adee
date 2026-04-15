@@ -1,0 +1,118 @@
+{
+  "projectType": "cli-tool",
+  "projectName": "Buildkite Agent",
+  "projectDescription": "An open-source, cross-platform build runner written in Go that polls Buildkite for jobs, executes them on your own infrastructure, and streams logs and artifacts back to Buildkite.",
+  "theme": "aspen",
+  "primaryColor": "#040404",
+  "lightColor": "#23d88f",
+  "darkColor": "#347070",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "installation",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Configuration",
+            "pages": [
+              "configuration/overview",
+              "configuration/environment-variables",
+              "configuration/hooks",
+              "configuration/plugins"
+            ]
+          },
+          {
+            "group": "Command Reference",
+            "pages": [
+              "commands/start",
+              "commands/artifact",
+              "commands/meta-data",
+              "commands/pipeline",
+              "commands/annotate",
+              "commands/step",
+              "commands/lock",
+              "commands/oidc"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/docker",
+              "guides/kubernetes",
+              "guides/git-mirrors",
+              "guides/artifacts",
+              "guides/experiments"
+            ]
+          },
+          {
+            "group": "Security",
+            "pages": [
+              "security/pipeline-signing",
+              "security/secrets-redaction",
+              "security/allowlists"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Job API",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": [
+              "job-api/overview",
+              "job-api/authentication"
+            ]
+          },
+          {
+            "group": "Endpoints",
+            "pages": [
+              "job-api/env",
+              "job-api/redactions"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Cross-platform build runner (Linux, macOS, Windows, Docker, Kubernetes)",
+    "Polls Buildkite API for jobs and streams logs/artifacts back in real time",
+    "Rich CLI with commands for artifacts, annotations, meta-data, pipeline uploads, OIDC, and more",
+    "Plugin system for extending job behaviour via Git or zip-based plugins",
+    "Hook system for customizing the agent lifecycle (checkout, pre-command, post-command, etc.)",
+    "Pipeline signing and verification using JWKS/AWS KMS/GCP KMS",
+    "Distributed locking primitives for coordinating concurrent agents",
+    "Local Job API (Unix socket) for in-job environment and redaction management",
+    "Kubernetes-native execution mode",
+    "Experimental feature flags for opt-in preview behaviours"
+  ],
+  "publicApiSurface": [
+    "buildkite-agent start",
+    "buildkite-agent bootstrap",
+    "buildkite-agent artifact upload/download/search/shasum",
+    "buildkite-agent annotate",
+    "buildkite-agent annotation remove",
+    "buildkite-agent meta-data get/set/exists/keys",
+    "buildkite-agent pipeline upload",
+    "buildkite-agent step get/update/cancel",
+    "buildkite-agent lock acquire/release/do/done/get",
+    "buildkite-agent oidc request-token",
+    "buildkite-agent env get/set/unset/dump",
+    "buildkite-agent redactor add",
+    "buildkite-agent secret get",
+    "buildkite-agent tool keygen/sign",
+    "buildkite-agent pause/resume/stop",
+    "Job API GET /api/current-job/v0/env",
+    "Job API PATCH /api/current-job/v0/env",
+    "Job API DELETE /api/current-job/v0/env",
+    "Job API POST /api/current-job/v0/redactions"
+  ]
+}

@@ -1,0 +1,280 @@
+---
+title: "Environment variables for the Buildkite Agent"
+description: "All BUILDKITE_ environment variables that configure the agent, from BUILDKITE_AGENT_TOKEN and BUILD_PATH to tagging, git, and security options."
+---
+
+Almost every CLI flag accepted by `buildkite-agent start` has a matching `BUILDKITE_*` environment variable. Setting the variable is equivalent to passing the flag — they carry the same default values and validation rules. CLI flags take precedence over environment variables, which in turn take precedence over values in the config file.
+
+The variables documented here map directly to flags defined in the agent source. Where a variable accepts a comma-separated list, you can supply multiple values separated by commas or pass the flag multiple times.
+
+## Core settings
+
+<ParamField path="env.BUILDKITE_AGENT_TOKEN" type="string" required>
+  Agent registration token. Obtained from your Buildkite organisation's **Agents** settings page. This is the only required configuration value.
+
+  ```bash
+  BUILDKITE_AGENT_TOKEN="tkn_xxxxxxxxxxxx"
+  ```
+</ParamField>
+
+<ParamField path="env.BUILDKITE_BUILD_PATH" type="string" required>
+  Absolute path where the agent checks out and runs builds. The directory is created automatically if it does not exist.
+
+  ```bash
+  BUILDKITE_BUILD_PATH="/var/buildkite/builds"
+  ```
+</ParamField>
+
+<ParamField path="env.BUILDKITE_AGENT_CONFIG" type="string">
+  Path to a `buildkite-agent.cfg` configuration file. When set, the agent loads this file instead of searching the default locations.
+
+  ```bash
+  BUILDKITE_AGENT_CONFIG="/opt/myapp/buildkite-agent.cfg"
+  ```
+</ParamField>
+
+<ParamField path="env.BUILDKITE_AGENT_NAME" type="string">
+  Display name for this agent instance. Use `%spawn` as a placeholder when running multiple workers with `--spawn`; the agent replaces it with the worker index.
+
+  ```bash
+  BUILDKITE_AGENT_NAME="my-agent-%spawn"
+  ```
+</ParamField>
+
+## Queue and tags
+
+<ParamField path="env.BUILDKITE_AGENT_QUEUE" type="string">
+  The queue this agent listens to. Overwrites any `queue=` value included in `BUILDKITE_AGENT_TAGS`. If neither is set, the agent uses the Buildkite default queue.
+
+  ```bash
+  BUILDKITE_AGENT_QUEUE="my-team"
+  ```
+</ParamField>
+
+<ParamField path="env.BUILDKITE_AGENT_TAGS" type="string">
+  Comma-separated list of `key=value` tags used for job targeting. Multiple values are separated by commas.
+
+  ```bash
+  BUILDKITE_AGENT_TAGS="os=linux,arch=amd64,gpu=true"
+  ```
+</ParamField>
+
+<ParamField path="env.BUILDKITE_AGENT_TAGS_FROM_HOST" type="boolean" default="false">
+  Automatically include host-derived tags: `hostname`, `machine-id`, and `os`.
+</ParamField>
+
+<ParamField path="env.BUILDKITE_AGENT_TAGS_FROM_EC2_META_DATA" type="boolean" default="false">
+  Include the default set of EC2 instance metadata as tags: `instance-id`, `instance-type`, `ami-id`, and `instance-life-cycle`.
+</ParamField>
+
+<ParamField path="env.BUILDKITE_AGENT_TAGS_FROM_EC2_TAGS" type="boolean" default="false">
+  Include the host's EC2 resource tags as agent tags. Requires the agent IAM role to have `ec2:DescribeTags` permission.
+</ParamField>
+
+<ParamField path="env.BUILDKITE_AGENT_TAGS_FROM_ECS_META_DATA" type="boolean" default="false">
+  Include ECS container metadata as tags: `container-name`, `image`, and `task-arn`.
+</ParamField>
+
+<ParamField path="env.BUILDKITE_AGENT_TAGS_FROM_GCP_META_DATA" type="boolean" default="false">
+  Include the default set of Google Cloud instance metadata as tags: `instance-id`, `machine-type`, `preemptible`, `project-id`, `region`, and `zone`.
+</ParamField>
+
+<ParamField path="env.BUILDKITE_AGENT_TAGS_FROM_GCP_LABELS" type="boolean" default="false">
+  Include the host's Google Cloud instance labels as agent tags.
+</ParamField>
+
+## Concurrency
+
+<ParamField path="env.BUILDKITE_AGENT_SPAWN" type="number" default="1">
+  Number of agent workers to start in parallel from a single `buildkite-agent start` process. Each worker runs independently and accepts its own jobs. Mutually exclusive with `BUILDKITE_AGENT_SPAWN_PER_CPU`.
+
+  ```bash
+  BUILDKITE_AGENT_SPAWN=4
+  ```
+</ParamField>
+
+<ParamField path="env.BUILDKITE_AGENT_SPAWN_PER_CPU" type="number" default="0">
+  Workers to spawn per logical CPU core. The total worker count is `(CPU count) × (this value)`. Mutually exclusive with `BUILDKITE_AGENT_SPAWN`.
+</ParamField>
+
+<ParamField path="env.BUILDKITE_AGENT_DISCONNECT_AFTER_JOB" type="boolean" default="false">
+  Disconnect and exit after completing exactly one job. Useful for ephemeral agent patterns (e.g. one agent per container).
+</ParamField>
+
+<ParamField path="env.BUILDKITE_AGENT_DISCONNECT_AFTER_IDLE_TIMEOUT" type="number" default="0">
+  Seconds to wait for a new job before disconnecting. `0` means the agent waits indefinitely.
+</ParamField>
+
+<ParamField path="env.BUILDKITE_AGENT_DISCONNECT_AFTER_UPTIME" type="number" default="0">
+  Maximum agent uptime in seconds. After this period the agent stops accepting new jobs and exits after any in-flight jobs complete. `0` means no limit.
+</ParamField>
+
+## File system paths
+
+<ParamField path="env.BUILDKITE_HOOKS_PATH" type="string">
+  Directory containing global [hook scripts](/configuration/hooks) that run for every job on this agent.
+
+  ```bash
+  BUILDKITE_HOOKS_PATH="/etc/buildkite-agent/hooks"
+  ```
+</ParamField>
+
+<ParamField path="env.BUILDKITE_ADDITIONAL_HOOKS_PATHS" type="string">
+  Comma-separated list of additional directories to search for agent hooks, checked after the primary `BUILDKITE_HOOKS_PATH`.
+</ParamField>
+
+<ParamField path="env.BUILDKITE_PLUGINS_PATH" type="string">
+  Directory where plugin repositories are cloned and cached.
+
+  ```bash
+  BUILDKITE_PLUGINS_PATH="/var/buildkite/plugins"
+  ```
+</ParamField>
+
+## Shell and execution
+
+<ParamField path="env.BUILDKITE_SHELL" type="string">
+  The shell command used to interpret build step commands. Defaults to `/bin/bash -e -c` on Linux/macOS and `C:\Windows\System32\CMD.exe /S /C` on Windows.
+
+  ```bash
+  BUILDKITE_SHELL="/bin/bash -e -c"
+  ```
+</ParamField>
+
+<ParamField path="env.BUILDKITE_HOOKS_SHELL" type="string">
+  The shell command used to interpret hook scripts when they differ from the build shell. Useful when hooks are written in PowerShell on a cross-platform agent.
+
+  ```bash
+  BUILDKITE_HOOKS_SHELL="pwsh -Command"
+  ```
+</ParamField>
+
+<ParamField path="env.BUILDKITE_NO_PTY" type="boolean" default="false">
+  Run jobs without a pseudo-terminal (PTY). PTY support is always disabled on Windows.
+</ParamField>
+
+## Git
+
+<ParamField path="env.BUILDKITE_GIT_CLONE_FLAGS" type="string" default="-v">
+  Additional flags passed to `git clone` during checkout.
+
+  ```bash
+  BUILDKITE_GIT_CLONE_FLAGS="-v --depth 1"
+  ```
+</ParamField>
+
+<ParamField path="env.BUILDKITE_GIT_FETCH_FLAGS" type="string" default="-v --prune">
+  Additional flags passed to `git fetch`.
+
+  ```bash
+  BUILDKITE_GIT_FETCH_FLAGS="-v --prune --tags"
+  ```
+</ParamField>
+
+<ParamField path="env.BUILDKITE_GIT_CHECKOUT_FLAGS" type="string" default="-f">
+  Additional flags passed to `git checkout`.
+</ParamField>
+
+<ParamField path="env.BUILDKITE_GIT_CLEAN_FLAGS" type="string" default="-ffxdq">
+  Additional flags passed to `git clean`. The default removes all untracked and ignored files.
+</ParamField>
+
+<ParamField path="env.BUILDKITE_NO_GIT_SUBMODULES" type="boolean" default="false">
+  Skip automatic checkout of git submodules.
+</ParamField>
+
+## Security
+
+<ParamField path="env.BUILDKITE_NO_COMMAND_EVAL" type="boolean" default="false">
+  Prevent the agent from running arbitrary commands defined in pipeline steps. When this flag is set, plugins are also disabled unless `BUILDKITE_NO_PLUGINS=false` is explicitly provided.
+
+  <Warning>
+    Setting `NO_COMMAND_EVAL` without also allowlisting trusted plugins via `BUILDKITE_ALLOWED_PLUGINS` effectively disables all pipeline execution.
+  </Warning>
+</ParamField>
+
+<ParamField path="env.BUILDKITE_NO_LOCAL_HOOKS" type="boolean" default="false">
+  Prevent hooks defined inside the checked-out repository (`.buildkite/hooks/`) from running. Like `NO_COMMAND_EVAL`, this also disables plugins unless `BUILDKITE_NO_PLUGINS=false` is set.
+</ParamField>
+
+<ParamField path="env.BUILDKITE_NO_PLUGINS" type="boolean" default="false">
+  Disallow all plugins on this agent.
+</ParamField>
+
+<ParamField path="env.BUILDKITE_NO_PLUGIN_VALIDATION" type="boolean" default="true">
+  Skip validation of plugin configuration against the plugin's declared JSON Schema and requirements list.
+</ParamField>
+
+<ParamField path="env.BUILDKITE_ALLOWED_PLUGINS" type="string">
+  Comma-separated list of regular expressions. Only plugins whose location matches at least one pattern are permitted.
+
+  ```bash
+  BUILDKITE_ALLOWED_PLUGINS="^buildkite-plugins/.*$,^/var/lib/buildkite-plugins/.*"
+  ```
+</ParamField>
+
+<ParamField path="env.BUILDKITE_ALLOWED_REPOSITORIES" type="string">
+  Comma-separated list of regular expressions. The agent refuses to clone repositories that do not match at least one pattern.
+
+  ```bash
+  BUILDKITE_ALLOWED_REPOSITORIES="^git@github.com:myorg/.*,^https://github.com/myorg/.*"
+  ```
+</ParamField>
+
+<ParamField path="env.BUILDKITE_NO_SSH_KEYSCAN" type="boolean" default="false">
+  Disable the automatic `ssh-keyscan` run before checkout. Set this when SSH host keys are already trusted via `known_hosts`.
+</ParamField>
+
+<ParamField path="env.BUILDKITE_ENABLE_ENVIRONMENT_VARIABLE_ALLOWLIST" type="boolean" default="false">
+  When enabled, only environment variables matching `BUILDKITE_ALLOWED_ENVIRONMENT_VARIABLES` (or set by Buildkite itself) are passed to jobs.
+</ParamField>
+
+<ParamField path="env.BUILDKITE_ALLOWED_ENVIRONMENT_VARIABLES" type="string">
+  Comma-separated list of regular expressions. Requires `BUILDKITE_ENABLE_ENVIRONMENT_VARIABLE_ALLOWLIST=true`.
+
+  ```bash
+  BUILDKITE_ALLOWED_ENVIRONMENT_VARIABLES="^MYAPP_.*$,^CI$"
+  ```
+</ParamField>
+
+## Plugins
+
+<ParamField path="env.BUILDKITE_PLUGINS_ALWAYS_CLONE_FRESH" type="boolean" default="false">
+  Always clone a fresh copy of each plugin, ignoring any cached version in `BUILDKITE_PLUGINS_PATH`.
+</ParamField>
+
+## Logging and output
+
+<ParamField path="env.BUILDKITE_LOG_FORMAT" type="string" default="text">
+  Log format for the agent process. Accepts `text` or `json`.
+</ParamField>
+
+<ParamField path="env.BUILDKITE_WRITE_JOB_LOGS_TO_STDOUT" type="boolean" default="false">
+  Write job output to the agent process's stdout instead of only to the Buildkite log stream. Simplifies log collection when running agents in Docker or Kubernetes.
+</ParamField>
+
+<ParamField path="env.BUILDKITE_NO_ANSI_TIMESTAMPS" type="boolean" default="false">
+  Do not insert ANSI timestamp codes at the start of each line of job output.
+</ParamField>
+
+<ParamField path="env.BUILDKITE_TIMESTAMP_LINES" type="boolean" default="false">
+  Prepend plain-text timestamps to each line of job output. Has no effect unless `BUILDKITE_NO_ANSI_TIMESTAMPS` is also set.
+</ParamField>
+
+## Metrics and tracing
+
+<ParamField path="env.BUILDKITE_METRICS_DATADOG" type="boolean" default="false">
+  Send agent metrics to a DogStatsD instance for Datadog.
+</ParamField>
+
+<ParamField path="env.BUILDKITE_METRICS_DATADOG_HOST" type="string" default="127.0.0.1:8125">
+  DogStatsD host and port to send metrics to over UDP.
+</ParamField>
+
+<ParamField path="env.BUILDKITE_TRACING_BACKEND" type="string">
+  Enable distributed tracing for build jobs. Accepts `datadog` or `opentelemetry`.
+</ParamField>
+
+<ParamField path="env.BUILDKITE_TRACING_SERVICE_NAME" type="string" default="buildkite-agent">
+  Service name reported in traces.
+</ParamField>

@@ -1,0 +1,177 @@
+---
+title: "Install the Buildkite Agent"
+description: "Install the Buildkite Agent on Linux, macOS, Windows, or Docker. Covers package managers, shell installer, and manual binary download."
+---
+
+The Buildkite Agent is distributed as a single static binary with no runtime dependencies beyond `dbus` on Linux. You can install it via a package manager, a one-line shell installer, or by downloading the binary directly from GitHub Releases.
+
+## Linux
+
+<Tabs>
+  <Tab title="Ubuntu / Debian (apt)">
+    Add the Buildkite apt repository and install the agent package.
+
+    ```bash
+    # Add the Buildkite apt key
+    curl -fsSL https://keys.buildkite.com/buildkite-agent-deb.gpg | \
+      sudo gpg --dearmor -o /etc/apt/keyrings/buildkite-agent.gpg
+
+    # Add the repository
+    echo "deb [signed-by=/etc/apt/keyrings/buildkite-agent.gpg] \
+      https://apt.buildkite.com/buildkite-agent stable main" | \
+      sudo tee /etc/apt/sources.list.d/buildkite-agent.list
+
+    # Install
+    sudo apt-get update && sudo apt-get install -y buildkite-agent
+    ```
+
+    <Tip>
+      After installation, set your agent token in `/etc/buildkite-agent/buildkite-agent.cfg` and start the agent with `sudo systemctl enable --now buildkite-agent`.
+    </Tip>
+  </Tab>
+  <Tab title="RHEL / CentOS (yum)">
+    Add the Buildkite yum repository and install the agent package.
+
+    ```bash
+    # Add the repository
+    sudo sh -c 'cat > /etc/yum.repos.d/buildkite-agent.repo << EOF
+    [buildkite-agent]
+    name=Buildkite Agent
+    baseurl=https://yum.buildkite.com/buildkite-agent/stable/x86_64/
+    enabled=1
+    gpgcheck=0
+    priority=9
+    EOF'
+
+    # Install
+    sudo yum install -y buildkite-agent
+    ```
+  </Tab>
+  <Tab title="Shell installer">
+    Use the one-line shell installer to download and configure the agent in `~/.buildkite-agent/`:
+
+    ```bash
+    TOKEN="your-agent-token" bash -c \
+      "`curl -sL https://raw.githubusercontent.com/buildkite/agent/main/install.sh`"
+    ```
+
+    The installer detects your platform and architecture automatically, downloads the correct binary to `~/.buildkite-agent/bin/`, and writes a starter config file to `~/.buildkite-agent/buildkite-agent.cfg`.
+
+    <Note>
+      `curl` or `wget`, plus `openssl` or `sha256sum`, must be available for checksum verification. Set `DISABLE_CHECKSUM_VERIFICATION=true` to skip verification if needed.
+    </Note>
+  </Tab>
+</Tabs>
+
+## macOS
+
+Install with [Homebrew](https://brew.sh):
+
+```bash
+brew install buildkite/buildkite/buildkite-agent
+```
+
+After installation, follow the instructions printed by Homebrew to set your agent token in the config file and start the agent as a launchd service.
+
+<Tip>
+  Homebrew installs the config file at `$(brew --prefix)/etc/buildkite-agent/buildkite-agent.cfg`.
+</Tip>
+
+## Windows
+
+<Tabs>
+  <Tab title="PowerShell installer">
+    Run the following in an **elevated** (Administrator) PowerShell session. Set `$env:buildkiteAgentToken` to your agent token before running.
+
+    ```powershell
+    $env:buildkiteAgentToken = "your-agent-token"
+    Set-ExecutionPolicy Bypass -Scope Process -Force
+    iex ((New-Object System.Net.WebClient).DownloadString(
+      'https://raw.githubusercontent.com/buildkite/agent/main/install.ps1'
+    ))
+    ```
+
+    The installer downloads the agent to `C:\buildkite-agent\`, restricts directory permissions to Administrators, writes `buildkite-agent.cfg` with your token, and adds `C:\buildkite-agent\bin` to `PATH`.
+
+    <Warning>
+      The PowerShell installer requires an elevated shell. Run PowerShell as Administrator before executing this command.
+    </Warning>
+  </Tab>
+  <Tab title="Manual download">
+    1. Download the latest Windows zip from [GitHub Releases](https://github.com/buildkite/agent/releases/latest). Choose `buildkite-agent-windows-amd64-<version>.zip` for 64-bit Intel or `buildkite-agent-windows-arm64-<version>.zip` for ARM.
+    2. Extract the zip to `C:\buildkite-agent\`.
+    3. Edit `C:\buildkite-agent\buildkite-agent.cfg` and set `token="your-agent-token"`.
+    4. Add `C:\buildkite-agent` to your `PATH`.
+  </Tab>
+</Tabs>
+
+## Docker
+
+Pull an official image from [Docker Hub](https://hub.docker.com/r/buildkite/agent):
+
+```bash
+docker pull buildkite/agent:3-ubuntu-22.04
+```
+
+Run the agent, passing your token as an environment variable:
+
+```bash
+docker run -e BUILDKITE_AGENT_TOKEN="your-agent-token" \
+  buildkite/agent:3-ubuntu-22.04
+```
+
+### Available image tags
+
+Images follow the pattern `<version>-<os>`. For agent version `3.45.6`:
+
+| Tag | Tracks |
+|-----|--------|
+| `3-ubuntu-22.04` | Minor and patch updates in the `3.x` series |
+| `3.45-ubuntu-22.04` | Patch updates in `3.45.x` |
+| `3.45.6-ubuntu-22.04` | Exact version, never updated |
+| `3-alpine-3.18` | Minor and patch updates, Alpine base |
+
+<Note>
+  For production use, pin to a minor or patch tag (e.g. `3.45-ubuntu-22.04`) to avoid unexpected updates while still receiving security patches.
+</Note>
+
+## Manual binary download
+
+Download a pre-built binary directly from GitHub Releases for any supported platform:
+
+```bash
+# Example: Linux amd64, version 3.123.0
+curl -L -o buildkite-agent.tar.gz \
+  "https://github.com/buildkite/agent/releases/download/v3.123.0/buildkite-agent-linux-amd64-3.123.0.tar.gz"
+
+tar -xzf buildkite-agent.tar.gz
+chmod +x buildkite-agent
+mv buildkite-agent /usr/local/bin/
+```
+
+Replace `linux-amd64` with your target platform (e.g. `darwin-arm64`, `windows-amd64`).
+
+## Verifying the installation
+
+After any installation method, confirm the agent binary is available and check its version:
+
+```bash
+buildkite-agent --version
+```
+
+You should see output like:
+
+```text
+buildkite-agent version 3.123.0, build ...
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Start your first agent and run a test build job.
+  </Card>
+  <Card title="Configuration" icon="sliders" href="/configuration/overview">
+    Configure tokens, queues, hooks paths, and more.
+  </Card>
+</CardGroup>

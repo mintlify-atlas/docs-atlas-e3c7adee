@@ -1,0 +1,99 @@
+---
+title: "buildkite-agent oidc — request OpenID Connect tokens"
+description: "Request signed OIDC tokens from Buildkite to authenticate with external services like AWS, GCP, and Vault without long-lived static credentials."
+---
+
+`buildkite-agent oidc` allows jobs to request signed OpenID Connect (OIDC) tokens from Buildkite. These tokens can be exchanged with external identity providers — such as AWS STS, Google Cloud's Workload Identity Federation, or HashiCorp Vault — to obtain short-lived credentials, eliminating the need to store long-lived static secrets in your CI environment. Each token claims the Buildkite Job ID and other build context, and can be scoped to a specific audience. Tokens are automatically redacted from job logs by default.
+
+## request-token
+
+Requests and prints an OIDC token from Buildkite. The token is a signed JWT and is written to stdout.
+
+```bash
+buildkite-agent oidc request-token [options...]
+```
+
+<ParamField path="--audience" type="string">
+  The intended consumer of the OIDC token, e.g. `sts.amazonaws.com` or `https://iam.googleapis.com/`. If omitted, the endpoint's default audience is used.
+</ParamField>
+
+<ParamField path="--lifetime" type="int">
+  Token validity period in seconds. Must be a non-negative integer. `0` or omitting this flag lets the API choose a default lifetime.
+</ParamField>
+
+<ParamField path="--subject-claim" type="string">
+  An immutable claim to use as the token's subject (e.g. `pipeline_id`, `cluster_id`). If omitted, the default compound subject is used. Environment variable: `BUILDKITE_OIDC_TOKEN_SUBJECT_CLAIM`
+</ParamField>
+
+<ParamField path="--claim" type="string">
+  Additional claims to include in the token. Can be specified multiple times. Environment variable: `BUILDKITE_OIDC_TOKEN_CLAIMS`
+</ParamField>
+
+<ParamField path="--aws-session-tag" type="string">
+  Include claims as AWS Session Tags. Can be specified multiple times. Environment variable: `BUILDKITE_OIDC_TOKEN_AWS_SESSION_TAGS`
+</ParamField>
+
+<ParamField path="--format" type="string">
+  Output format for the token. One of `jwt` (default, prints the raw JWT) or `gcp` (prints a JSON structure compatible with GCP Workload Identity Federation). Default: `jwt`.
+</ParamField>
+
+<ParamField path="--job" type="string">
+  Buildkite Job ID to claim in the token. Defaults to `BUILDKITE_JOB_ID`. Environment variable: `BUILDKITE_JOB_ID`
+</ParamField>
+
+<ParamField path="--skip-redaction" type="bool">
+  Skip redacting the token from job logs. When set, the token will appear in plaintext in the job log output. Default: `false`. Environment variable: `BUILDKITE_AGENT_OIDC_REQUEST_TOKEN_SKIP_TOKEN_REDACTION`
+</ParamField>
+
+## Examples
+
+<CodeGroup>
+
+```bash Request token for AWS STS
+TOKEN=$(buildkite-agent oidc request-token --audience sts.amazonaws.com)
+aws sts assume-role-with-web-identity \
+  --role-arn arn:aws:iam::123456789:role/my-role \
+  --role-session-name buildkite-session \
+  --web-identity-token "$TOKEN"
+```
+
+```bash Request token for GCP Workload Identity
+buildkite-agent oidc request-token \
+  --audience https://iam.googleapis.com/projects/PROJECT/locations/global/workloadIdentityPools/POOL/providers/PROVIDER \
+  --format gcp > /tmp/bk-cred.json
+
+gcloud auth login --cred-file /tmp/bk-cred.json
+```
+
+```bash Token with a custom subject claim
+buildkite-agent oidc request-token \
+  --audience sts.amazonaws.com \
+  --subject-claim pipeline_id
+```
+
+```bash Token with a custom lifetime
+buildkite-agent oidc request-token \
+  --audience sts.amazonaws.com \
+  --lifetime 3600
+```
+
+```bash Token with AWS session tags
+buildkite-agent oidc request-token \
+  --audience sts.amazonaws.com \
+  --aws-session-tag "branch" \
+  --aws-session-tag "pipeline_slug"
+```
+
+</CodeGroup>
+
+<Note>
+  OIDC tokens are automatically redacted from job logs to prevent accidental
+  exposure. Pass `--skip-redaction` only if you need to inspect the raw token
+  for debugging purposes — never in production pipelines.
+</Note>
+
+<Tip>
+  The GCP format (`--format gcp`) outputs a JSON credential file suitable for
+  use with `gcloud auth login --cred-file`. The JWT format is suitable for all
+  other providers that accept a raw bearer token.
+</Tip>

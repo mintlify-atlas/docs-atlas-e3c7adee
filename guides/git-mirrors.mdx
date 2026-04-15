@@ -1,0 +1,130 @@
+---
+title: "Speed up checkouts with Git mirrors"
+description: "Use local Git mirrors to share repository caches across multiple Buildkite Agents on the same host, dramatically reducing clone times for large repositories."
+---
+
+Git mirrors allow multiple Buildkite Agents running on the same host (or sharing a network file system) to share a single local cache of each repository. Instead of each agent cloning the full repository from the network for every job, agents clone from the local mirror, which is only fetched from the remote when needed. For large repositories this can cut checkout times from minutes to seconds.
+
+## How mirrors work
+
+When `--git-mirrors-path` is set, the agent maintains a `git clone --mirror` of each repository it encounters, stored under the mirrors path. Each agent job then performs a `git clone --reference <mirror>` for its workspace checkout, which means the checkout directory borrows objects from the mirror rather than copying them from the remote.
+
+Two checkout modes control exactly how objects are borrowed:
+
+- **`reference` mode** (default) — the checkout directly references objects in the mirror. This uses the least disk space and is the fastest to set up, but the checkout can become corrupted if the mirror runs garbage collection and removes objects still in use.
+- **`dissociate` mode** — passes `git clone --dissociate`, which copies all needed objects out of the mirror into the checkout at clone time. The checkout is then independent of the mirror, which eliminates the corruption risk at the cost of more disk usage and slightly longer clone times.
+
+<Note>
+Git mirrors also apply to submodules. When a job checks out a repository with submodules, the agent creates and updates mirror clones of each submodule repository and configures the checkout to reference them.
+</Note>
+
+## Locking for concurrent access
+
+Multiple agents running in parallel may attempt to update the same mirror simultaneously. `git fetch` is not safe to run concurrently on the same repository, so the agent uses a file-based locking mechanism to ensure only one agent updates a given mirror at a time. Other agents wait for the lock to be released before proceeding.
+
+Because the mirrors directory can reside on a network file system shared across multiple machines, the locking mechanism is file-based rather than in-memory, allowing cross-machine coordination.
+
+## Configuration
+
+### `--git-mirrors-path`
+
+| Detail | Value |
+|--------|-------|
+| Flag | `--git-mirrors-path` |
+| Env var | `BUILDKITE_GIT_MIRRORS_PATH` |
+| Default | *(empty — mirrors disabled)* |
+
+Path to the directory where mirror clones are stored. Setting this flag enables Git mirrors. All agents on the host should point to the same path to share the cache.
+
+```bash
+buildkite-agent start \
+  --token "$BUILDKITE_AGENT_TOKEN" \
+  --build-path /var/buildkite/builds \
+  --git-mirrors-path /var/buildkite/mirrors
+```
+
+### `--git-mirror-checkout-mode`
+
+| Detail | Value |
+|--------|-------|
+| Flag | `--git-mirror-checkout-mode` |
+| Env var | `BUILDKITE_GIT_MIRROR_CHECKOUT_MODE` |
+| Default | `reference` |
+| Options | `reference`, `dissociate` |
+
+Controls how workspace checkouts are created from the mirror.
+
+- `reference` — fastest, lowest disk usage, but checkouts can be corrupted by mirror garbage collection.
+- `dissociate` — copies objects into the checkout at clone time, making the checkout robust to mirror changes at the cost of extra disk space and setup time.
+
+```bash
+buildkite-agent start \
+  --git-mirrors-path /var/buildkite/mirrors \
+  --git-mirror-checkout-mode dissociate
+```
+
+### `--git-mirrors-lock-timeout`
+
+| Detail | Value |
+|--------|-------|
+| Flag | `--git-mirrors-lock-timeout` |
+| Env var | `BUILDKITE_GIT_MIRRORS_LOCK_TIMEOUT` |
+| Default | `300` (seconds) |
+
+Maximum number of seconds an agent will hold a lock on a mirror during a clone or fetch. Set this value higher than your longest expected checkout to avoid premature lock expiry. Other agents waiting for the same mirror will time out after this period.
+
+### `--git-mirrors-skip-update`
+
+| Detail | Value |
+|--------|-------|
+| Flag | `--git-mirrors-skip-update` |
+| Env var | `BUILDKITE_GIT_MIRRORS_SKIP_UPDATE` |
+| Default | `false` |
+
+When enabled, the agent skips the `git fetch` step that updates the mirror before cloning. Useful if the mirror is managed externally or if you want to avoid network traffic for builds against commits already present in the mirror.
+
+## Example: shared mirrors on a single host
+
+The following example starts four agents, all sharing the same mirrors directory:
+
+<Steps>
+  <Step title="Create the directories">
+    ```bash
+    sudo mkdir -p /var/buildkite/{builds,mirrors}
+    sudo chown -R buildkite-agent: /var/buildkite
+    ```
+  </Step>
+  <Step title="Configure the agent">
+    Add the following to `/etc/buildkite-agent/buildkite-agent.cfg`:
+
+    ```ini
+    token="your-agent-token"
+    build-path="/var/buildkite/builds"
+    git-mirrors-path="/var/buildkite/mirrors"
+    git-mirror-checkout-mode="dissociate"
+    git-mirrors-lock-timeout=600
+    spawn=4
+    ```
+  </Step>
+  <Step title="Start the agents">
+    ```bash
+    sudo systemctl start buildkite-agent
+    ```
+
+    All four spawned agents share the mirror cache at `/var/buildkite/mirrors`.
+  </Step>
+</Steps>
+
+## Checkout corruption and recovery
+
+In `reference` mode, checkout corruption can occur when the mirror runs `git maintenance` during a fetch and removes objects that are still referenced by an existing checkout directory. This is more likely to happen after force-pushes that make old commits unreachable in the remote.
+
+The agent handles corrupted checkouts by deleting the checkout directory entirely and re-cloning it from the mirror. Because the mirror itself is kept up to date, the re-clone is fast and does not require a full remote fetch.
+
+<Tip>
+Use `--git-mirror-checkout-mode=dissociate` to eliminate the risk of checkout corruption. The trade-off is additional disk usage proportional to the size of each checkout's object store.
+</Tip>
+
+## Network file system considerations
+
+Mirrors can be shared across multiple hosts by placing the mirrors directory on a network file system (NFS, SMB, etc.). The file-based locking mechanism works across machines, so concurrent access is coordinated correctly. However, network file system latency can make lock acquisition slower — set `--git-mirrors-lock-timeout` to a value high enough to account for this.

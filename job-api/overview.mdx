@@ -1,0 +1,85 @@
+---
+title: "Buildkite Job API overview"
+description: "The Buildkite Job API is a local HTTP server exposed via Unix socket that lets running jobs inspect and mutate their environment variables and redaction list."
+---
+
+The Job API is a per-job HTTP server that the Buildkite Agent starts automatically for each running job. It listens on a Unix Domain Socket local to the host — not a network port — and gives your job scripts a structured way to read and modify their own environment variables, and to add values to the agent's live redaction list. Because the socket is local and protected by a per-job bearer token, no other process on the network can reach it.
+
+## Enabling the Job API
+
+The Job API is controlled by the `agent-api` experiment flag. Enable it when starting the agent:
+
+```bash
+buildkite-agent start --experiment agent-api
+```
+
+Or add it to your [agent configuration file](https://buildkite.com/docs/agent/v3/configuration):
+
+```ini
+experiment="agent-api"
+```
+
+<Note>
+The Job API requires a Unix Domain Socket and is available on Linux, macOS, and Windows builds 17063 and later. On unsupported Windows versions the agent logs a warning and continues without the API.
+</Note>
+
+## Socket path
+
+When the agent starts a job, it creates a socket file under the sockets directory. The default sockets directory is `~/.buildkite-agent/sockets`, and socket files are placed in a `job-api/` subdirectory with a name based on the agent's process ID and a random number:
+
+```
+~/.buildkite-agent/sockets/job-api/<pid>-<random>.sock
+```
+
+You can change the sockets directory with the `--sockets-path` flag:
+
+```bash
+buildkite-agent start --experiment agent-api --sockets-path /tmp/buildkite-sockets
+```
+
+## Environment variables injected into jobs
+
+When the Job API is enabled, the agent automatically sets two environment variables inside the running job:
+
+| Variable | Description |
+|---|---|
+| `BUILDKITE_AGENT_JOB_API_SOCKET` | Absolute path to the Unix socket for this job. |
+| `BUILDKITE_AGENT_JOB_API_TOKEN` | Bearer token required to authenticate every request. |
+
+Both variables are scoped to the current job. Once the job finishes the socket is closed and the token becomes invalid.
+
+## Authentication
+
+Every request must include the bearer token from `BUILDKITE_AGENT_JOB_API_TOKEN` in the `Authorization` header:
+
+```
+Authorization: Bearer <token>
+```
+
+See [Authenticate with the Buildkite Job API](/job-api/authentication) for full details and examples.
+
+## Available endpoints
+
+All endpoints are mounted under `/api/current-job/v0` on the Unix socket. Every response body is JSON with `Content-Type: application/json`.
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/current-job/v0/env` | Return all current environment variables for the job. |
+| `PATCH` | `/api/current-job/v0/env` | Set or update one or more environment variables. |
+| `DELETE` | `/api/current-job/v0/env` | Remove one or more environment variables by key. |
+| `POST` | `/api/current-job/v0/redactions` | Add a string to the agent's live redaction list. |
+
+Detailed request and response schemas are documented on:
+
+- [Env endpoints — GET, PATCH, DELETE](/job-api/env)
+- [Redactions endpoint — POST](/job-api/redactions)
+
+## Use cases
+
+**Dynamic secret injection** — Fetch a secret from a vault inside a hook or script, set it as an environment variable with `PATCH /env`, and subsequent steps in the same job will see it.
+
+**Runtime redaction** — After retrieving a secret dynamically, immediately register it with `POST /redactions` so the agent masks it in all subsequent log output for the job.
+
+**Environment inspection** — Use `GET /env` to read the full job environment from a script or plugin without relying on shell `export` semantics or subshell scoping issues.
+
+**Conditional cleanup** — Remove temporary or intermediate environment variables with `DELETE /env` once they are no longer needed.

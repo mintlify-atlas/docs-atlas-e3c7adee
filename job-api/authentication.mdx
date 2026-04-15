@@ -1,0 +1,106 @@
+---
+title: "Authenticate with the Buildkite Job API"
+description: "The Job API uses a per-job bearer token injected as BUILDKITE_AGENT_JOB_API_TOKEN. Pass it in the Authorization header on every request to the Unix socket."
+---
+
+When the agent starts a job with the `agent-api` experiment enabled, it generates a random 32-byte bearer token and injects it into the job environment as `BUILDKITE_AGENT_JOB_API_TOKEN`. Every request to the Job API must include this token in the `Authorization` header. Requests without a valid token receive a `401 Unauthorized` response and are not processed.
+
+## Injected environment variables
+
+The agent sets both of the following variables automatically at job startup. You do not need to configure them manually.
+
+| Variable | Description |
+|---|---|
+| `BUILDKITE_AGENT_JOB_API_SOCKET` | Absolute path to the Unix Domain Socket for this job. Use this as the `--unix-socket` argument when calling the API with `curl`. |
+| `BUILDKITE_AGENT_JOB_API_TOKEN` | Per-job bearer token. Include this in every `Authorization` header. |
+
+<Warning>
+`BUILDKITE_AGENT_JOB_API_TOKEN` is scoped to a single job. It becomes invalid as soon as the job finishes and the socket is closed. Do not store or reuse it across jobs.
+</Warning>
+
+## Making authenticated requests
+
+Pass the socket path to `curl` with `--unix-socket` and include the token as a `Bearer` credential in the `Authorization` header. The hostname in the URL is ignored when connecting over a Unix socket — use any placeholder such as `job`.
+
+<CodeGroup>
+
+```bash Get environment variables
+curl --unix-socket "$BUILDKITE_AGENT_JOB_API_SOCKET" \
+  --request GET \
+  --header "Authorization: Bearer $BUILDKITE_AGENT_JOB_API_TOKEN" \
+  http://job/api/current-job/v0/env
+```
+
+```bash Set an environment variable
+curl --unix-socket "$BUILDKITE_AGENT_JOB_API_SOCKET" \
+  --request PATCH \
+  --header "Authorization: Bearer $BUILDKITE_AGENT_JOB_API_TOKEN" \
+  --header "Content-Type: application/json" \
+  --data '{"env": {"MY_SECRET": "hunter2"}}' \
+  http://job/api/current-job/v0/env
+```
+
+```bash Add a redaction
+curl --unix-socket "$BUILDKITE_AGENT_JOB_API_SOCKET" \
+  --request POST \
+  --header "Authorization: Bearer $BUILDKITE_AGENT_JOB_API_TOKEN" \
+  --header "Content-Type: application/json" \
+  --data '{"redact": "hunter2"}' \
+  http://job/api/current-job/v0/redactions
+```
+
+</CodeGroup>
+
+## Token scope and lifetime
+
+The token is generated fresh for each job from a cryptographically random source. It is only valid for the duration of that job — once the job completes, the agent shuts down the socket server and the token can no longer be used.
+
+The socket file itself is accessible only to the OS user running the agent process. Combined with the short-lived token, this means the risk of token exposure is low. However, if your agent's `-redacted-vars` pattern matches `BUILDKITE_AGENT_JOB_API_TOKEN` (for example, via a wildcard like `*TOKEN*`), the agent will automatically add the token to the redaction list so it does not appear in job logs.
+
+## Error responses
+
+All error responses from the Job API use the same JSON shape:
+
+<ResponseField name="error" type="string" required>
+  A human-readable description of what went wrong.
+</ResponseField>
+
+### Missing `Authorization` header
+
+```
+HTTP/1.1 401 Unauthorized
+```
+
+```json
+{"error": "authorization header is required"}
+```
+
+### Malformed `Authorization` header
+
+```
+HTTP/1.1 401 Unauthorized
+```
+
+```json
+{"error": "invalid authorization header: must be in the form `Bearer <token>`"}
+```
+
+### Wrong scheme (not `Bearer`)
+
+```
+HTTP/1.1 401 Unauthorized
+```
+
+```json
+{"error": "invalid authorization header: type must be Bearer"}
+```
+
+### Invalid or expired token
+
+```
+HTTP/1.1 401 Unauthorized
+```
+
+```json
+{"error": "invalid authorization token"}
+```

@@ -1,0 +1,275 @@
+---
+title: "buildkite-agent start — run the agent"
+description: "Start a Buildkite agent worker that polls for jobs. Supports spawning multiple workers, tag-based routing, git mirrors, tracing, and Kubernetes execution."
+---
+
+`buildkite-agent start` connects to Buildkite, registers the agent, and begins polling for jobs. When a job is ready to run it calls the bootstrap script, which checks out the repository and runs the build commands defined in the pipeline. The agent runs jobs inside a PTY (pseudo-terminal) when one is available, and forwards all output back to Buildkite.
+
+## Core flags
+
+<ParamField path="--token" type="string" required>
+  Your account agent token. Environment variable: `BUILDKITE_AGENT_TOKEN`
+</ParamField>
+
+<ParamField path="--build-path" type="string" required>
+  Path to where builds will run from. Environment variable: `BUILDKITE_BUILD_PATH`
+</ParamField>
+
+<ParamField path="--name" type="string">
+  The name of the agent. Use `%spawn` as a placeholder when spawning multiple agents. Environment variable: `BUILDKITE_AGENT_NAME`
+</ParamField>
+
+<ParamField path="--tags" type="string">
+  Comma-separated list of tags for the agent, e.g. `linux` or `mac,xcode=8`. Environment variable: `BUILDKITE_AGENT_TAGS`
+</ParamField>
+
+<ParamField path="--queue" type="string">
+  The queue the agent listens to for jobs. Overwrites any `queue` tag already present in `--tags`. Environment variable: `BUILDKITE_AGENT_QUEUE`
+</ParamField>
+
+<ParamField path="--spawn" type="int">
+  Number of agent workers to spawn in parallel. Mutually exclusive with `--spawn-per-cpu`. Default: `1`. Environment variable: `BUILDKITE_AGENT_SPAWN`
+</ParamField>
+
+<ParamField path="--spawn-per-cpu" type="int">
+  Number of agents to spawn per logical CPU. Mutually exclusive with `--spawn`. Environment variable: `BUILDKITE_AGENT_SPAWN_PER_CPU`
+</ParamField>
+
+<ParamField path="--priority" type="string">
+  Priority of the agent. Higher-priority agents are assigned work first. Environment variable: `BUILDKITE_AGENT_PRIORITY`
+</ParamField>
+
+<ParamField path="--config" type="string">
+  Path to a configuration file. Environment variable: `BUILDKITE_AGENT_CONFIG`
+</ParamField>
+
+<ParamField path="--hooks-path" type="string">
+  Directory containing hook scripts. Environment variable: `BUILDKITE_HOOKS_PATH`
+</ParamField>
+
+<ParamField path="--plugins-path" type="string">
+  Directory where plugins are saved. Environment variable: `BUILDKITE_PLUGINS_PATH`
+</ParamField>
+
+<ParamField path="--shell" type="string">
+  Shell command used to interpret build commands, e.g. `/bin/bash -e -c`. Defaults are platform-specific. Environment variable: `BUILDKITE_SHELL`
+</ParamField>
+
+<ParamField path="--health-check-addr" type="string">
+  Start an HTTP server on `addr:port` that reports agent health. Disabled by default. Environment variable: `BUILDKITE_AGENT_HEALTH_CHECK_ADDR`
+</ParamField>
+
+## Lifecycle flags
+
+<ParamField path="--disconnect-after-job" type="bool">
+  Disconnect the agent after running exactly one job. When combined with `--spawn`, each worker runs exactly one job. Default: `false`. Environment variable: `BUILDKITE_AGENT_DISCONNECT_AFTER_JOB`
+</ParamField>
+
+<ParamField path="--disconnect-after-idle-timeout" type="int">
+  Maximum idle time in seconds before disconnecting. `0` means no timeout. Environment variable: `BUILDKITE_AGENT_DISCONNECT_AFTER_IDLE_TIMEOUT`
+</ParamField>
+
+<ParamField path="--disconnect-after-uptime" type="int">
+  Maximum uptime in seconds before the agent stops accepting new jobs and shuts down once running jobs complete. `0` means no timeout. Environment variable: `BUILDKITE_AGENT_DISCONNECT_AFTER_UPTIME`
+</ParamField>
+
+<ParamField path="--acquire-job" type="string">
+  Start the agent, run only the specified job ID, then disconnect. Environment variable: `BUILDKITE_AGENT_ACQUIRE_JOB`
+</ParamField>
+
+<ParamField path="--cancel-signal" type="string">
+  Signal sent to the job process when it is cancelled. Default: `SIGTERM`. Environment variable: `BUILDKITE_CANCEL_SIGNAL`
+</ParamField>
+
+<ParamField path="--cancel-grace-period" type="int">
+  Seconds a cancelled or timed-out job has to gracefully terminate and upload artifacts. Default: `10`. Environment variable: `BUILDKITE_CANCEL_GRACE_PERIOD`
+</ParamField>
+
+<ParamField path="--signal-grace-period-seconds" type="int">
+  Seconds given to a subprocess to handle `cancel-signal` before `SIGKILL` is sent. Negative values are relative to `cancel-grace-period`. Default: `-1`. Environment variable: `BUILDKITE_SIGNAL_GRACE_PERIOD_SECONDS`
+</ParamField>
+
+## Git flags
+
+<ParamField path="--git-clone-flags" type="string">
+  Flags passed to `git clone`. Default: `-v`. Environment variable: `BUILDKITE_GIT_CLONE_FLAGS`
+</ParamField>
+
+<ParamField path="--git-fetch-flags" type="string">
+  Flags passed to `git fetch`. Default: `-v --prune`. Environment variable: `BUILDKITE_GIT_FETCH_FLAGS`
+</ParamField>
+
+<ParamField path="--git-clean-flags" type="string">
+  Flags passed to `git clean`. Default: `-ffxdq`. Environment variable: `BUILDKITE_GIT_CLEAN_FLAGS`
+</ParamField>
+
+<ParamField path="--git-checkout-flags" type="string">
+  Flags passed to `git checkout`. Default: `-f`. Environment variable: `BUILDKITE_GIT_CHECKOUT_FLAGS`
+</ParamField>
+
+<ParamField path="--git-mirrors-path" type="string">
+  Path where mirrors of git repositories are stored. Enables mirror-based clones. Environment variable: `BUILDKITE_GIT_MIRRORS_PATH`
+</ParamField>
+
+<ParamField path="--git-mirror-checkout-mode" type="string">
+  How clones of a mirror are made. One of `dissociate` (copies objects from the mirror, more robust) or `reference` (uses objects directly from the mirror, faster). Default: `reference`. Environment variable: `BUILDKITE_GIT_MIRROR_CHECKOUT_MODE`
+</ParamField>
+
+<ParamField path="--no-git-submodules" type="bool">
+  Skip automatic checkout of git submodules. Default: `false`. Environment variable: `BUILDKITE_NO_GIT_SUBMODULES`
+</ParamField>
+
+<ParamField path="--checkout-attempts" type="int">
+  Number of checkout attempts including the initial one. Failed attempts are retried with exponential backoff. Default: `6`. Environment variable: `BUILDKITE_CHECKOUT_ATTEMPTS`
+</ParamField>
+
+## Security flags
+
+<ParamField path="--no-command-eval" type="bool">
+  Prevent the agent from running arbitrary console commands, including plugins. Default: `false`. Environment variable: `BUILDKITE_NO_COMMAND_EVAL`
+</ParamField>
+
+<ParamField path="--no-local-hooks" type="bool">
+  Prevent local hooks from being run from checked-out repositories. Default: `false`. Environment variable: `BUILDKITE_NO_LOCAL_HOOKS`
+</ParamField>
+
+<ParamField path="--no-plugins" type="bool">
+  Prevent the agent from loading plugins. Default: `false`. Environment variable: `BUILDKITE_NO_PLUGINS`
+</ParamField>
+
+<ParamField path="--allowed-repositories" type="string">
+  Comma-separated list of regular expressions representing repositories the agent is allowed to clone, e.g. `^git@github.com:myorg/.*`. Environment variable: `BUILDKITE_ALLOWED_REPOSITORIES`
+</ParamField>
+
+<ParamField path="--allowed-plugins" type="string">
+  Comma-separated list of regular expressions representing plugins the agent is allowed to use. Environment variable: `BUILDKITE_ALLOWED_PLUGINS`
+</ParamField>
+
+<ParamField path="--enable-environment-variable-allowlist" type="bool">
+  Only run jobs where all environment variables are explicitly allowed. Default: `false`. Environment variable: `BUILDKITE_ENABLE_ENVIRONMENT_VARIABLE_ALLOWLIST`
+</ParamField>
+
+<ParamField path="--allowed-environment-variables" type="string">
+  Comma-separated list of regular expressions for environment variables the agent passes to jobs. Always allows Buildkite-set variables. Requires `--enable-environment-variable-allowlist`. Environment variable: `BUILDKITE_ALLOWED_ENVIRONMENT_VARIABLES`
+</ParamField>
+
+<ParamField path="--redacted-vars" type="string">
+  Pattern of environment variable names containing sensitive values. Default patterns include `*_PASSWORD`, `*_SECRET`, `*_TOKEN`, `*_API_KEY`, etc. Environment variable: `BUILDKITE_REDACTED_VARS`
+</ParamField>
+
+<ParamField path="--verification-jwks-file" type="string">
+  Path to a JWKS file used to verify job signatures. Environment variable: `BUILDKITE_AGENT_VERIFICATION_JWKS_FILE`
+</ParamField>
+
+<ParamField path="--verification-failure-behavior" type="string">
+  Behaviour when a job has no valid verifiable signature. One of `block` or `warn`. Default: `block`. Environment variable: `BUILDKITE_AGENT_JOB_VERIFICATION_NO_SIGNATURE_BEHAVIOR`
+</ParamField>
+
+<ParamField path="--signing-jwks-file" type="string">
+  Path to a signing key file. Enables pipeline signing for all pipelines uploaded by this agent. Environment variable: `BUILDKITE_AGENT_SIGNING_JWKS_FILE`
+</ParamField>
+
+<ParamField path="--signing-jwks-key-id" type="string">
+  JWKS key ID to use when signing pipelines. If omitted and the JWKS contains only one key, that key is used. Environment variable: `BUILDKITE_AGENT_SIGNING_JWKS_KEY_ID`
+</ParamField>
+
+<ParamField path="--signing-aws-kms-key" type="string">
+  AWS KMS key ID or alias used for signing and verifying pipelines. Environment variable: `BUILDKITE_AGENT_SIGNING_AWS_KMS_KEY`
+</ParamField>
+
+<ParamField path="--signing-gcp-kms-key" type="string">
+  GCP KMS key resource name used for signing and verifying pipelines. Format: `projects/*/locations/*/keyRings/*/cryptoKeys/*/cryptoKeyVersions/*`. Environment variable: `BUILDKITE_AGENT_SIGNING_GCP_KMS_KEY`
+</ParamField>
+
+## Tracing flags
+
+<ParamField path="--tracing-backend" type="string">
+  Enable tracing for build jobs. One of `datadog` or `opentelemetry`. Environment variable: `BUILDKITE_TRACING_BACKEND`
+</ParamField>
+
+<ParamField path="--tracing-service-name" type="string">
+  Service name reported in traces. Default: `buildkite-agent`. Environment variable: `BUILDKITE_TRACING_SERVICE_NAME`
+</ParamField>
+
+<ParamField path="--tracing-propagate-traceparent" type="bool">
+  Accept traceparent context from the Buildkite control plane. Only supported for the OpenTelemetry backend. Default: `false`. Environment variable: `BUILDKITE_TRACING_PROPAGATE_TRACEPARENT`
+</ParamField>
+
+## Kubernetes flags
+
+<ParamField path="--kubernetes-exec" type="bool">
+  Enable a Unix socket for transporting logs and exit statuses between containers in a pod. Intended for use with [agent-stack-k8s](https://github.com/buildkite/agent-stack-k8s). Default: `false`. Environment variable: `BUILDKITE_KUBERNETES_EXEC`
+</ParamField>
+
+<ParamField path="--kubernetes-container-start-timeout" type="duration">
+  Timeout for waiting for all containers to start in a Kubernetes pod. Default: `5m`. Environment variable: `BUILDKITE_KUBERNETES_CONTAINER_START_TIMEOUT`
+</ParamField>
+
+## Cloud tag flags
+
+<ParamField path="--tags-from-host" type="bool">
+  Include tags derived from the host: `hostname`, `machine-id`, and `os`. Default: `false`. Environment variable: `BUILDKITE_AGENT_TAGS_FROM_HOST`
+</ParamField>
+
+<ParamField path="--tags-from-ec2-meta-data" type="bool">
+  Include EC2 instance metadata as tags: `instance-id`, `instance-type`, `ami-id`, and `instance-life-cycle`. Environment variable: `BUILDKITE_AGENT_TAGS_FROM_EC2_META_DATA`
+</ParamField>
+
+<ParamField path="--tags-from-ec2-tags" type="bool">
+  Include the host's EC2 resource tags as agent tags. Default: `false`. Environment variable: `BUILDKITE_AGENT_TAGS_FROM_EC2_TAGS`
+</ParamField>
+
+<ParamField path="--tags-from-ecs-meta-data" type="bool">
+  Include ECS metadata as tags: `container-name`, `image`, and `task-arn`. Default: `false`. Environment variable: `BUILDKITE_AGENT_TAGS_FROM_ECS_META_DATA`
+</ParamField>
+
+<ParamField path="--tags-from-gcp-meta-data" type="bool">
+  Include Google Cloud instance metadata as tags: `instance-id`, `machine-type`, `preemptible`, `project-id`, `region`, and `zone`. Environment variable: `BUILDKITE_AGENT_TAGS_FROM_GCP_META_DATA`
+</ParamField>
+
+<ParamField path="--tags-from-gcp-labels" type="bool">
+  Include the host's Google Cloud instance labels as agent tags. Default: `false`. Environment variable: `BUILDKITE_AGENT_TAGS_FROM_GCP_LABELS`
+</ParamField>
+
+## Examples
+
+<CodeGroup>
+
+```bash Minimal startup
+buildkite-agent start --token "your-agent-token"
+```
+
+```bash Multiple workers
+buildkite-agent start --token "your-agent-token" \
+  --spawn 4 \
+  --tags "queue=default,os=linux"
+```
+
+```bash Ephemeral single-job agent
+buildkite-agent start --token "your-agent-token" \
+  --disconnect-after-job \
+  --tags "queue=ephemeral"
+```
+
+```bash EC2 with automatic tags
+buildkite-agent start --token "your-agent-token" \
+  --tags-from-ec2-meta-data \
+  --tags-from-ec2-tags \
+  --health-check-addr "0.0.0.0:8080"
+```
+
+```bash OpenTelemetry tracing
+buildkite-agent start --token "your-agent-token" \
+  --tracing-backend opentelemetry \
+  --tracing-service-name "my-buildkite-agent"
+```
+
+</CodeGroup>
+
+<Note>
+  Configuration can also be provided through a config file. By default the agent
+  searches for `buildkite-agent.cfg` at several well-known paths including
+  `$HOME/.buildkite-agent/buildkite-agent.cfg` and
+  `/etc/buildkite-agent/buildkite-agent.cfg`. Pass `--config` to specify a
+  custom path.
+</Note>

@@ -1,0 +1,120 @@
+---
+title: "Buildkite Agent experimental features"
+description: "Opt into experimental Buildkite Agent features with --experiment flags. Each experiment is described with its current status and how to enable it."
+---
+
+The Buildkite Agent ships experimental features that can be opted into before they become stable defaults. Experiments allow the team to gather real-world feedback and iterate on behaviour without committing to it as a permanent API. Once an experiment is stable and widely adopted, it is promoted to a standard flag or made the default — at which point the experiment name is retired.
+
+<Warning>
+Experimental features may be changed or removed without notice between agent versions. Do not depend on experiment behaviour in production pipelines without accepting that it may break on upgrade.
+</Warning>
+
+## Enabling experiments
+
+Pass one or more `--experiment` flags when starting the agent:
+
+```bash
+buildkite-agent start \
+  --token "$BUILDKITE_AGENT_TOKEN" \
+  --experiment normalised-upload-paths \
+  --experiment resolve-commit-after-checkout
+```
+
+Or set them in your agent configuration file (`buildkite-agent.cfg`):
+
+```ini
+experiment="normalised-upload-paths,resolve-commit-after-checkout"
+```
+
+If an experiment name does not exist, the agent silently ignores it — no error is raised.
+
+## Available experiments
+
+<AccordionGroup>
+  <Accordion title="normalised-upload-paths">
+    Artifacts found by `buildkite-agent artifact upload` are uploaded using URI/Unix-style forward-slash paths, even on Windows agents. Without this experiment, Windows agents preserve the backslash path separator in artifact names, producing non-URI-compatible paths in Buildkite's UI and API.
+
+    **Example:**
+
+    ```bash
+    buildkite-agent artifact upload "coverage\report.xml"
+    ```
+
+    | Mode | Stored path |
+    |------|-------------|
+    | Default (no experiment) | `s3://bucket/coverage\report.xml` |
+    | With `normalised-upload-paths` | `s3://bucket/coverage/report.xml` |
+
+    **Status:** A major improvement for Windows compatibility. The Buildkite team intends to make this the standard behaviour in v4.
+  </Accordion>
+
+  <Accordion title="resolve-commit-after-checkout">
+    After repository checkout, the agent resolves `BUILDKITE_COMMIT` to the full commit SHA. This is useful for builds triggered against non-commit-hash refs such as `HEAD` or a branch name, where `BUILDKITE_COMMIT` would otherwise contain the ref name rather than the actual hash.
+
+    **Status:** Broadly useful. The Buildkite team intends to make this the standard behaviour in v4.
+  </Accordion>
+
+  <Accordion title="agent-api">
+    Exposes a local Unix Domain Socket API for interacting with the agent process. The API provides primitives that can be used to solve local concurrency problems — for example, multiple agents on the same host coordinating access to a shared local resource such as a hardware device or a file-based lock.
+
+    The socket path is fixed on the system (configurable via `--sockets-path`) and is not exposed as an environment variable within jobs.
+
+    **Status:** Experimental while the API surface is being finalised. Likely to be promoted to a non-experiment soon.
+  </Accordion>
+
+  <Accordion title="pty-raw">
+    Sets the pseudo-terminal (PTY) to raw mode, which prevents the PTY from mapping line feed (`\n`) characters to carriage-return + line feed (`\r\n`) in job command output. Without this experiment, the extra carriage-return characters are usually invisible in log viewers but can cause logs to appear double-spaced in some environments.
+
+    The agent runs commands inside a PTY primarily so that programs detect a terminal and produce coloured output and progress meters. Raw mode prevents the PTY from modifying the output stream while preserving this detection behaviour.
+
+    **Status:** Experimental for opt-in testing before being promoted to always-on.
+  </Accordion>
+
+  <Accordion title="override-zero-exit-on-cancel">
+    When a job is cancelled and the job process exits with status code 0, this experiment overrides the exit status to 1. On Linux and macOS, sending a signal to a process typically causes it to exit with a non-zero status, so cancelled jobs correctly appear as failed. On Windows, however, the process exits with code 0, making cancelled jobs appear successful. This experiment ensures consistent behaviour across operating systems.
+
+    **Status:** Experimental for opt-in testing. The Buildkite team hopes to promote this to the default behaviour soon.
+  </Accordion>
+
+  <Accordion title="interpolation-prefers-runtime-env">
+    Changes how pipeline-level environment variables are interpolated. Normally, Buildkite's documentation states that the job runtime environment takes precedence over variables defined in the pipeline's environment block. However, depending on ordering, a pipeline-level variable could take precedence instead.
+
+    This experiment re-enables runtime environment variable precedence during pipeline-level environment block interpolation. It was briefly the default behaviour in v3.63.0 but was subsequently reverted.
+
+    **Status:** Available as an escape hatch for users who depend on the v3.63.0 behaviour. The team would like to understand use cases — contact Buildkite support if you enable this experiment.
+  </Accordion>
+
+  <Accordion title="allow-artifact-path-traversal">
+    Controls whether artifact paths containing `..` components are allowed to traverse above the download destination directory.
+
+    By default (experiment disabled), path traversal is blocked: if an artifact has the path `../../foo.txt`, running `buildkite-agent artifact download '*.txt' .` downloads the file to `./foo.txt`, not `../../foo.txt`.
+
+    With this experiment enabled, the original (less secure) behaviour is restored and `../../foo.txt` is downloaded to `../../foo.txt`.
+
+    **When to use:** Enable this experiment only if you have legitimately uploaded artifacts with `..` components in their paths and need backward-compatible download behaviour. The disabled (default) behaviour is more secure.
+
+    **Status:** An escape hatch for the security fix introduced to block path traversal. The new default (disabled) behaviour is the recommended setting.
+  </Accordion>
+
+  <Accordion title="descending-spawn-priority">
+    When using `--spawn` together with `--spawn-with-priority`, the agent normally assigns ascending integer priorities to spawned agents (1, 2, 3, …). This experiment reverses the assignment to descending priorities (−1, −2, −3, …).
+
+    Descending priorities help distribute jobs across all hosts in a fleet where the `--spawn` count varies between hosts. With ascending priorities, the host with the highest `--spawn` count always has the highest-priority agents and receives more work.
+
+    **Status:** Experimental as an escape hatch from the default priority behaviour. Will be promoted to a regular flag soon.
+  </Accordion>
+
+  <Accordion title="propagate-agent-config-vars">
+    Prepends agent configuration environment variables (such as `BUILDKITE_GIT_*`, `BUILDKITE_SHELL`, `BUILDKITE_CANCEL_GRACE_PERIOD`, and others) to the environment file used by the job runner. Without this experiment, these variables are only available to the agent process itself.
+
+    This is particularly useful in Docker-based environments where the agent container's environment is not automatically visible to job containers.
+
+    **Status:** Experimental while the team evaluates the impact on job environments.
+  </Accordion>
+
+  <Accordion title="zip-plugins">
+    Allows Buildkite plugins to be downloaded as zip archives from HTTP(S) URLs rather than being cloned from a Git repository. This is useful for hosting plugins as release archives on services that do not provide Git access, or for air-gapped environments where zip files can be pre-staged internally.
+
+    **Status:** Experimental while zip archive support for plugins is being tested.
+  </Accordion>
+</AccordionGroup>

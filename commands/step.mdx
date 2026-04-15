@@ -1,0 +1,169 @@
+---
+title: "buildkite-agent step — inspect and update build steps"
+description: "Read or modify attributes of build steps at runtime, including labels, priority, and notifications, and cancel unfinished jobs for a given step."
+---
+
+`buildkite-agent step` allows jobs to inspect and modify other steps in the same build at runtime. You can read a step's current state or any other attribute, update mutable fields such as labels and priorities, and cancel all unfinished jobs for a given step. Steps can be targeted by their step ID (`BUILDKITE_STEP_ID`) or their key (`BUILDKITE_STEP_KEY`). All subcommands require `BUILDKITE_AGENT_ACCESS_TOKEN`, which is set automatically inside a running Buildkite job.
+
+## Subcommands
+
+| Subcommand | Description |
+|---|---|
+| `get` | Read the value of a step attribute |
+| `update` | Update the value of a step attribute |
+| `cancel` | Cancel all unfinished jobs for a step |
+
+---
+
+## get
+
+Retrieves the value of an attribute of a step and prints it to stdout. If no attribute is specified, the entire step is returned. For complex values (objects or arrays), use `--format json`.
+
+```bash
+buildkite-agent step get [attribute] [options...]
+```
+
+<ParamField path="[attribute]" type="string">
+  The attribute to retrieve, e.g. `label`, `state`. Omit to return the full step as JSON.
+</ParamField>
+
+<ParamField path="--step" type="string" required>
+  The step to query. Can be its ID (`BUILDKITE_STEP_ID`) or key (`BUILDKITE_STEP_KEY`). Defaults to `BUILDKITE_STEP_ID`. Environment variable: `BUILDKITE_STEP_ID`
+</ParamField>
+
+<ParamField path="--build" type="string">
+  The build to search for the step in. Required when targeting a step by key rather than ID. Environment variable: `BUILDKITE_BUILD_ID`
+</ParamField>
+
+<ParamField path="--format" type="string">
+  Output format for complex values. Currently only `json` is supported. Environment variable: `BUILDKITE_STEP_GET_FORMAT`
+</ParamField>
+
+### Examples
+
+<CodeGroup>
+
+```bash Get a step's label
+buildkite-agent step get "label" --step "$BUILDKITE_STEP_ID"
+```
+
+```bash Get state by step key
+buildkite-agent step get "state" \
+  --step "my-build-step" \
+  --build "$BUILDKITE_BUILD_ID"
+```
+
+```bash Get the entire step as JSON
+buildkite-agent step get --format json --step "$BUILDKITE_STEP_ID"
+```
+
+</CodeGroup>
+
+---
+
+## update
+
+Updates a mutable attribute of a step. The value can be supplied as a positional argument, piped from stdin, or read from a file.
+
+```bash
+buildkite-agent step update <attribute> <value> [options...]
+```
+
+<ParamField path="<attribute>" type="string" required>
+  The attribute to update, e.g. `label`, `priority`, `notify`.
+</ParamField>
+
+<ParamField path="<value>" type="string">
+  The new value. Omit to read from stdin.
+</ParamField>
+
+<ParamField path="--step" type="string" required>
+  The step to update. Can be its ID (`BUILDKITE_STEP_ID`) or key (`BUILDKITE_STEP_KEY`). Defaults to `BUILDKITE_STEP_ID`. Environment variable: `BUILDKITE_STEP_ID`
+</ParamField>
+
+<ParamField path="--build" type="string">
+  The build to look for the step in. Required when targeting a step by key. Environment variable: `BUILDKITE_BUILD_ID`
+</ParamField>
+
+<ParamField path="--append" type="bool">
+  Append to the current attribute value instead of replacing it. Default: `false`. Environment variable: `BUILDKITE_STEP_UPDATE_APPEND`
+</ParamField>
+
+<ParamField path="--redacted-vars" type="string">
+  Pattern of environment variable names containing sensitive values. Matching secrets are redacted from the new value before upload. Environment variable: `BUILDKITE_REDACTED_VARS`
+</ParamField>
+
+### Examples
+
+<CodeGroup>
+
+```bash Update a step label
+buildkite-agent step update "label" "Tests (Node 20)"
+```
+
+```bash Append to a label
+buildkite-agent step update "label" " (retry)" --append
+```
+
+```bash Read new label from stdin
+echo "New Label" | buildkite-agent step update "label"
+```
+
+```bash Set priority
+buildkite-agent step update "priority" 10 \
+  --step "my-step-key" \
+  --build "$BUILDKITE_BUILD_ID"
+```
+
+```bash Add a Slack notification
+buildkite-agent step update "notify" \
+  '[{"slack": "my-workspace#deploy-alerts"}]' \
+  --append
+```
+
+</CodeGroup>
+
+<Note>
+  Step labels are used in commit status updates. Updating a running step's
+  label may leave an orphaned status under the old label. To avoid this,
+  disable automatic commit status updates in your pipeline's GitHub settings.
+</Note>
+
+---
+
+## cancel
+
+Cancels all unfinished jobs for the specified step. By default the agent waits for jobs to finish uploading artifacts. Use `--force` to transition jobs to a cancelled state immediately, subject to a configurable grace period.
+
+```bash
+buildkite-agent step cancel [options...]
+```
+
+<ParamField path="--step" type="string" required>
+  The step to cancel. Can be its ID (`BUILDKITE_STEP_ID`) or key (`BUILDKITE_STEP_KEY`). Defaults to `BUILDKITE_STEP_ID`. Environment variable: `BUILDKITE_STEP_ID`
+</ParamField>
+
+<ParamField path="--force" type="bool">
+  Transition unfinished jobs to a cancelled state immediately instead of waiting for artifact uploads to complete. Default: `false`. Environment variable: `BUILDKITE_STEP_CANCEL_FORCE`
+</ParamField>
+
+<ParamField path="--force-grace-period-seconds" type="int">
+  Seconds to wait for artifact uploads before forcefully cancelling. Only applies when `--force` is set. Default: `10`. Environment variable: `BUILDKITE_STEP_CANCEL_FORCE_GRACE_PERIOD_SECONDS`
+</ParamField>
+
+### Examples
+
+<CodeGroup>
+
+```bash Cancel a step by key
+buildkite-agent step cancel --step "integration-tests"
+```
+
+```bash Force cancel with a 30-second grace period
+buildkite-agent step cancel \
+  --step "integration-tests" \
+  --force \
+  --force-grace-period-seconds 30
+```
+
+</CodeGroup>

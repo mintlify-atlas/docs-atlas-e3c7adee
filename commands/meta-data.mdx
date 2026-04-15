@@ -1,0 +1,176 @@
+---
+title: "buildkite-agent meta-data — get and set job metadata"
+description: "Read and write arbitrary key/value data scoped to a Buildkite build. Share state between jobs using set, get, exists, and keys subcommands."
+---
+
+`buildkite-agent meta-data` provides a simple key/value store scoped to a Buildkite build. It is commonly used to share state between jobs in the same build — for example, recording a version string computed in one job and reading it in a later deployment job. All subcommands require `BUILDKITE_AGENT_ACCESS_TOKEN` and either `BUILDKITE_JOB_ID` or `BUILDKITE_BUILD_ID`, which are set automatically inside a running Buildkite job.
+
+## Subcommands
+
+| Subcommand | Description |
+|---|---|
+| `set` | Write a value for a key |
+| `get` | Read the value for a key |
+| `exists` | Check whether a key has been set |
+| `keys` | List all keys that have been set |
+
+---
+
+## set
+
+Sets a key in the build's metadata store. The value can be supplied as a positional argument, piped from stdin, or read from a file.
+
+```bash
+buildkite-agent meta-data set <key> [value] [options...]
+```
+
+<ParamField path="<key>" type="string" required>
+  The metadata key to set. Must not be empty or consist entirely of whitespace.
+</ParamField>
+
+<ParamField path="[value]" type="string">
+  The value to store. Must not be empty or consist entirely of whitespace. Omit this argument to read the value from stdin.
+</ParamField>
+
+<ParamField path="--job" type="string">
+  Job whose build the metadata should be set on. Defaults to `BUILDKITE_JOB_ID`. Environment variable: `BUILDKITE_JOB_ID`
+</ParamField>
+
+<ParamField path="--redacted-vars" type="string">
+  Pattern of environment variable names containing sensitive values. Matching secrets are redacted from the stored value. Environment variable: `BUILDKITE_REDACTED_VARS`
+</ParamField>
+
+### Examples
+
+<CodeGroup>
+
+```bash Set a literal value
+buildkite-agent meta-data set "release-version" "1.2.3"
+```
+
+```bash Set from a file
+buildkite-agent meta-data set "release-notes" < ./notes.txt
+```
+
+```bash Set from a script
+./scripts/compute-version | buildkite-agent meta-data set "version"
+```
+
+</CodeGroup>
+
+---
+
+## get
+
+Retrieves the value stored for a key and writes it to stdout. Retries up to 10 times on transient API errors. If the key does not exist and `--default` is provided, the default value is printed instead.
+
+```bash
+buildkite-agent meta-data get <key> [options...]
+```
+
+<ParamField path="<key>" type="string" required>
+  The metadata key to retrieve.
+</ParamField>
+
+<ParamField path="--default" type="string">
+  Value to return if the key does not exist. Allows the empty string as a valid default.
+</ParamField>
+
+<ParamField path="--job" type="string">
+  Job whose build the metadata should be retrieved from. Defaults to `BUILDKITE_JOB_ID`. Environment variable: `BUILDKITE_JOB_ID`
+</ParamField>
+
+<ParamField path="--build" type="string">
+  Build to retrieve metadata from. Takes precedence over `--job`. Environment variable: `BUILDKITE_METADATA_BUILD_ID`
+</ParamField>
+
+### Examples
+
+<CodeGroup>
+
+```bash Read a value
+buildkite-agent meta-data get "release-version"
+```
+
+```bash Read with a fallback default
+buildkite-agent meta-data get "optional-flag" --default "false"
+```
+
+```bash Use in a shell script
+VERSION=$(buildkite-agent meta-data get "release-version")
+echo "Deploying version: $VERSION"
+```
+
+</CodeGroup>
+
+---
+
+## exists
+
+Checks whether a key has been set in the build's metadata store. Exits `0` if the key exists, or `100` if it does not.
+
+```bash
+buildkite-agent meta-data exists <key> [options...]
+```
+
+<ParamField path="<key>" type="string" required>
+  The metadata key to check.
+</ParamField>
+
+<ParamField path="--job" type="string">
+  Job whose build should be checked. Defaults to `BUILDKITE_JOB_ID`. Environment variable: `BUILDKITE_JOB_ID`
+</ParamField>
+
+<ParamField path="--build" type="string">
+  Build to check. Takes precedence over `--job`. Environment variable: `BUILDKITE_METADATA_BUILD_ID`
+</ParamField>
+
+### Examples
+
+<CodeGroup>
+
+```bash Check existence in a shell conditional
+if buildkite-agent meta-data exists "release-version"; then
+  echo "Release version is set"
+fi
+```
+
+</CodeGroup>
+
+<Note>
+  The exit code `100` (not `1`) is used when the key does not exist, allowing
+  scripts to distinguish "key missing" from other failure conditions.
+</Note>
+
+---
+
+## keys
+
+Lists all metadata keys that have been set in the build, one per line with a trailing newline.
+
+```bash
+buildkite-agent meta-data keys [options...]
+```
+
+<ParamField path="--job" type="string">
+  Job whose build should be queried. Defaults to `BUILDKITE_JOB_ID`. Environment variable: `BUILDKITE_JOB_ID`
+</ParamField>
+
+<ParamField path="--build" type="string">
+  Build to query. Takes precedence over `--job`. Environment variable: `BUILDKITE_METADATA_BUILD_ID`
+</ParamField>
+
+### Examples
+
+<CodeGroup>
+
+```bash List all keys
+buildkite-agent meta-data keys
+```
+
+```bash Store keys in an array
+mapfile -t KEYS < <(buildkite-agent meta-data keys)
+echo "Found ${#KEYS[@]} keys"
+```
+
+</CodeGroup>

@@ -1,0 +1,242 @@
+---
+title: "Pipeline signing and verification"
+description: "Sign Buildkite pipeline steps with JWKS, AWS KMS, or GCP KMS to ensure only trusted pipelines run on your agents. Verify signatures before job execution."
+---
+
+Pipeline signing protects your build infrastructure against supply chain attacks, where an attacker modifies a pipeline definition in transit or in storage so that agents run untrusted commands. When signing is enabled, the agent cryptographically signs each step at upload time and the executing agent verifies the signature before running the job. Any step with a missing or invalid signature is either blocked outright or logged as a warning, depending on your configuration.
+
+## How it works
+
+The agent that uploads a pipeline (typically triggered by a `buildkite-agent pipeline upload` call) signs each step using a private key. The signature covers the step's command, environment variables, plugins, and repository URL. The agent that picks up the resulting job then verifies the signature against a public key (or uses the same symmetric key). If the signed fields no longer match the job as it arrived from the Buildkite backend, verification fails.
+
+## Generating a signing key
+
+Use `buildkite-agent tool keygen` to generate a JWKS key pair. The command writes a private JWKS file (used for signing) and a public JWKS file (used for verification) to the current directory.
+
+```bash
+buildkite-agent tool keygen \
+  --alg EdDSA \
+  --key-id my-pipeline-key \
+  --private-jwks-file ./private-key.json \
+  --public-jwks-file ./public-key.json
+```
+
+<ParamField path="--alg" type="string" default="EdDSA">
+  The JWS signing algorithm for the generated key pair. Defaults to `EdDSA`. Set via `BUILDKITE_AGENT_KEYGEN_ALG`.
+</ParamField>
+
+<ParamField path="--key-id" type="string">
+  The ID embedded in both generated keys. If omitted, a random human-readable name is generated. Set via `BUILDKITE_AGENT_KEYGEN_KEY_ID`.
+</ParamField>
+
+<ParamField path="--private-jwks-file" type="string">
+  Output path for the private JWKS. Defaults to `./<alg>-<key-id>-private.json` in the current directory. Set via `BUILDKITE_AGENT_KEYGEN_PRIVATE_JWKS_FILE`.
+</ParamField>
+
+<ParamField path="--public-jwks-file" type="string">
+  Output path for the public JWKS. Defaults to `./<alg>-<key-id>-public.json` in the current directory. Set via `BUILDKITE_AGENT_KEYGEN_PUBLIC_JWKS_FILE`.
+</ParamField>
+
+<Warning>
+  Keep the private JWKS file secret. It should only be accessible by the agents responsible for uploading pipelines. Store it in a secrets manager or mount it into the agent's environment at runtime rather than committing it to source control.
+</Warning>
+
+## Signing a pipeline
+
+Use `buildkite-agent tool sign` to annotate an existing pipeline YAML with signatures. You can sign a file directly, or retrieve the pipeline definition from the Buildkite GraphQL API and optionally push the signed version back.
+
+<Tabs>
+  <Tab title="From a file">
+    ```bash
+    buildkite-agent tool sign pipeline.yml \
+      --jwks-file ./private-key.json \
+      --repo https://github.com/my-org/my-repo
+    ```
+
+    Pipe from stdin:
+
+    ```bash
+    cat pipeline.yml | buildkite-agent tool sign \
+      --jwks-file ./private-key.json \
+      --repo https://github.com/my-org/my-repo
+    ```
+  </Tab>
+  <Tab title="Via GraphQL API">
+    ```bash
+    buildkite-agent tool sign \
+      --graphql-token "$BUILDKITE_GRAPHQL_TOKEN" \
+      --organization-slug my-org \
+      --pipeline-slug my-pipeline \
+      --jwks-file ./private-key.json \
+      --update
+    ```
+
+    Omit `--update` to print the signed YAML to stdout without pushing.
+  </Tab>
+</Tabs>
+
+<ParamField path="--jwks-file" type="string">
+  Path to the private JWKS file used to sign the pipeline. Set via `BUILDKITE_AGENT_JWKS_FILE`.
+</ParamField>
+
+<ParamField path="--jwks-key-id" type="string">
+  The key ID within the JWKS to use for signing. If the file contains a single key, it is used automatically. Set via `BUILDKITE_AGENT_JWKS_KEY_ID`.
+</ParamField>
+
+<ParamField path="--repo" type="string">
+  Repository URL included in the signature payload. Required when signing offline (without `--graphql-token`). Set via `BUILDKITE_REPO`.
+</ParamField>
+
+<ParamField path="--graphql-token" type="string">
+  Buildkite GraphQL API token. When provided, the pipeline definition and repository URL are fetched from Buildkite. Set via `BUILDKITE_GRAPHQL_TOKEN`.
+</ParamField>
+
+<ParamField path="--update" type="boolean" default="false">
+  Push the signed pipeline back to Buildkite via the GraphQL API after signing. Only valid with `--graphql-token`. Set via `BUILDKITE_TOOL_SIGN_UPDATE`.
+</ParamField>
+
+<ParamField path="--no-confirm" type="boolean" default="false">
+  Skip the interactive confirmation prompt when `--update` is set. Set via `BUILDKITE_TOOL_SIGN_NO_CONFIRM`.
+</ParamField>
+
+<ParamField path="--organization-slug" type="string">
+  Your Buildkite organization slug. Required when using the GraphQL API. Set via `BUILDKITE_ORGANIZATION_SLUG`.
+</ParamField>
+
+<ParamField path="--pipeline-slug" type="string">
+  The pipeline slug to retrieve and optionally update. Required when using the GraphQL API. Set via `BUILDKITE_PIPELINE_SLUG`.
+</ParamField>
+
+<Note>
+  Pipelines containing environment variable interpolations (e.g. `$MY_VAR`) cannot be signed statically with `tool sign`. Remove interpolations from the static YAML, or upload the pipeline dynamically during a job where the interpolations are resolved before signing.
+</Note>
+
+## Signing backends
+
+The signing tooling supports three backends: a local JWKS file, AWS KMS, and GCP KMS.
+
+<CodeGroup>
+
+```bash JWKS file (agent start)
+buildkite-agent start \
+  --signing-jwks-file /run/secrets/private-key.json \
+  --signing-jwks-key-id my-pipeline-key
+```
+
+```bash AWS KMS (agent start)
+buildkite-agent start \
+  --signing-aws-kms-key alias/buildkite-pipeline-signing
+```
+
+```bash GCP KMS (agent start)
+buildkite-agent start \
+  --signing-gcp-kms-key \
+  projects/my-project/locations/global/keyRings/buildkite/cryptoKeys/pipeline-signing/cryptoKeyVersions/1
+```
+
+</CodeGroup>
+
+<ParamField path="--signing-jwks-file" type="string">
+  Path to a file containing the signing key (private JWKS or raw HMAC key). Enables pipeline signing for all pipelines uploaded by this agent. Set via `BUILDKITE_AGENT_SIGNING_JWKS_FILE`.
+</ParamField>
+
+<ParamField path="--signing-jwks-key-id" type="string">
+  The key ID to use from the JWKS when signing. If omitted and the JWKS contains only one key, that key is used. Set via `BUILDKITE_AGENT_SIGNING_JWKS_KEY_ID`.
+</ParamField>
+
+<ParamField path="--signing-aws-kms-key" type="string">
+  AWS KMS key ID or alias used for signing and verifying. The agent uses the AWS SDK default credential chain. Set via `BUILDKITE_AGENT_SIGNING_AWS_KMS_KEY`.
+</ParamField>
+
+<ParamField path="--signing-gcp-kms-key" type="string">
+  GCP KMS key resource name used for signing and verifying. Format: `projects/*/locations/*/keyRings/*/cryptoKeys/*/cryptoKeyVersions/*`. Set via `BUILDKITE_AGENT_SIGNING_GCP_KMS_KEY`.
+</ParamField>
+
+## Configuring agents to verify signatures
+
+Agents that execute jobs use a separate verification key. For JWKS-based signing, provide the public JWKS. For KMS-based signing, the same KMS key is used for both operations.
+
+<CodeGroup>
+
+```bash JWKS verification
+buildkite-agent start \
+  --verification-jwks-file /run/secrets/public-key.json \
+  --verification-failure-behavior block
+```
+
+```bash AWS KMS verification
+buildkite-agent start \
+  --signing-aws-kms-key alias/buildkite-pipeline-signing \
+  --verification-failure-behavior block
+```
+
+```bash GCP KMS verification
+buildkite-agent start \
+  --signing-gcp-kms-key \
+  projects/my-project/locations/global/keyRings/buildkite/cryptoKeys/pipeline-signing/cryptoKeyVersions/1 \
+  --verification-failure-behavior block
+```
+
+</CodeGroup>
+
+<ParamField path="--verification-jwks-file" type="string">
+  Path to a file containing the public JWKS used to verify job signatures. Set via `BUILDKITE_AGENT_VERIFICATION_JWKS_FILE`.
+</ParamField>
+
+<ParamField path="--verification-failure-behavior" type="string" default="block">
+  What to do when a job arrives without a valid signature. Accepted values: `block` (refuse to run the job) or `warn` (log a warning but continue). Set via `BUILDKITE_AGENT_JOB_VERIFICATION_NO_SIGNATURE_BEHAVIOR`.
+</ParamField>
+
+<Warning>
+  In production, always set `--verification-failure-behavior block`. Using `warn` is appropriate only during an initial rollout while you verify that all pipelines are signed correctly.
+</Warning>
+
+## Debug logging
+
+<ParamField path="--debug-signing" type="boolean" default="false">
+  Emit detailed signing and verification logs. **This flag can leak secret values into build logs** because it prints each step in full before signing. Only enable it alongside `--debug` when troubleshooting, never in production. Set via `BUILDKITE_AGENT_DEBUG_SIGNING`.
+</ParamField>
+
+## Step-by-step setup
+
+<Steps>
+  <Step title="Generate a key pair">
+    Run `buildkite-agent tool keygen` on a secure machine and store the resulting files:
+
+    ```bash
+    buildkite-agent tool keygen \
+      --alg EdDSA \
+      --key-id prod-signing \
+      --private-jwks-file ./prod-signing-private.json \
+      --public-jwks-file ./prod-signing-public.json
+    ```
+  </Step>
+
+  <Step title="Store the private key securely">
+    Upload `prod-signing-private.json` to your secrets manager (AWS Secrets Manager, GCP Secret Manager, HashiCorp Vault, etc.) and configure the upload agent to receive it at runtime.
+  </Step>
+
+  <Step title="Sign the pipeline">
+    Run `buildkite-agent tool sign` with the private key to annotate your pipeline steps with signatures, then paste the output into the Buildkite YAML steps editor or push it back via `--update`.
+  </Step>
+
+  <Step title="Configure the signing agent">
+    Pass `--signing-jwks-file` to the agent that uploads pipelines so that dynamically uploaded pipelines (via `buildkite-agent pipeline upload`) are also signed.
+
+    ```bash
+    buildkite-agent start \
+      --signing-jwks-file /run/secrets/prod-signing-private.json \
+      --signing-jwks-key-id prod-signing
+    ```
+  </Step>
+
+  <Step title="Configure the executing agent to verify">
+    Pass `--verification-jwks-file` pointing to the public key and set `--verification-failure-behavior block`:
+
+    ```bash
+    buildkite-agent start \
+      --verification-jwks-file /run/secrets/prod-signing-public.json \
+      --verification-failure-behavior block
+    ```
+  </Step>
+</Steps>

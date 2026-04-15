@@ -1,0 +1,147 @@
+---
+title: "Run the Buildkite Agent on Kubernetes"
+description: "Configure the Buildkite Agent for Kubernetes execution mode. Covers kubernetes-exec, container start timeout, pod spec examples, and K8s-specific tags."
+---
+
+The Buildkite Agent includes a native Kubernetes execution mode that enables jobs to be distributed across multiple containers within a single Kubernetes pod. In this mode, the agent container acts as an RPC server over a Unix socket, and each step container connects to it as a client to receive environment variables, stream logs, and report exit statuses. This architecture is used by the [Buildkite Kubernetes Stack](https://github.com/buildkite/agent-stack-k8s) (`agent-stack-k8s`) and is not the same as running an ordinary agent inside a generic Kubernetes pod.
+
+<Note>
+This guide covers the agent-side Kubernetes execution mode (`--kubernetes-exec`). It describes how the agent communicates between containers in a pod. If you are looking for a higher-level solution for scheduling Buildkite jobs on Kubernetes, see the [agent-stack-k8s](https://github.com/buildkite/agent-stack-k8s) project.
+</Note>
+
+## How Kubernetes mode works
+
+When the agent starts with `--kubernetes-exec`, instead of spawning a subprocess directly for each job, it starts a Unix socket server at `/workspace/buildkite.sock`. Step containers in the same pod run `buildkite-agent kubernetes-bootstrap`, which:
+
+1. Connects to the socket and registers with the agent container.
+2. Receives the job environment variables (agent session token, build path, bootstrap phases, etc.) from the agent via the registration response.
+3. Runs `buildkite-agent bootstrap` to execute its assigned phase.
+4. Streams logs back to the agent container over the socket, which forwards them to Buildkite.
+5. Reports its exit code back to the agent before disconnecting.
+
+Containers run sequentially by default: container 0 starts immediately, and each subsequent container (1, 2, …) waits until the previous container has exited before starting. If any container exits with a non-zero status, the agent terminates the job immediately.
+
+### Startup and liveness
+
+The agent waits for all expected containers to connect before considering the job started. If any container fails to connect within the configured timeout, the agent fails the job. Once running, the agent performs periodic liveness checks: if a connected container stops responding for too long (e.g. because it was OOM-killed), the agent marks it as lost and self-terminates.
+
+## Enabling Kubernetes mode
+
+Pass `--kubernetes-exec` when starting the agent:
+
+```bash
+buildkite-agent start \
+  --token "$BUILDKITE_AGENT_TOKEN" \
+  --build-path /workspace/build \
+  --kubernetes-exec \
+  --kubernetes-container-start-timeout 5m
+```
+
+Or set the corresponding environment variables:
+
+```bash
+BUILDKITE_KUBERNETES_EXEC=true
+BUILDKITE_KUBERNETES_CONTAINER_START_TIMEOUT=5m
+```
+
+## Flags
+
+### `--kubernetes-exec`
+
+| Detail | Value |
+|--------|-------|
+| Flag | `--kubernetes-exec` |
+| Env var | `BUILDKITE_KUBERNETES_EXEC` |
+| Default | `false` |
+
+Enables the Kubernetes execution mode. When set, the agent opens a Unix socket server at `/workspace/buildkite.sock` and expects one or more containers to connect via `buildkite-agent kubernetes-bootstrap` instead of running the bootstrap directly as a subprocess.
+
+The `BUILDKITE_KUBERNETES_EXEC` environment variable is also preserved in the job environment as a detection mechanism for pipeline code that needs to know it is running inside the Kubernetes stack.
+
+### `--kubernetes-container-start-timeout`
+
+| Detail | Value |
+|--------|-------|
+| Flag | `--kubernetes-container-start-timeout` |
+| Env var | `BUILDKITE_KUBERNETES_CONTAINER_START_TIMEOUT` |
+| Default | `5m` |
+
+The maximum time the agent waits for all containers in the pod to connect to the socket before failing the job. Set this high enough to account for image pull time and container startup overhead in your cluster.
+
+## The `kubernetes-bootstrap` command
+
+The `buildkite-agent kubernetes-bootstrap` command is run by step containers (not the agent container) to connect to the agent and execute their assigned bootstrap phase. It is used internally by `agent-stack-k8s` and is not intended to be invoked directly by users.
+
+```
+buildkite-agent kubernetes-bootstrap [options...]
+```
+
+Key behaviour:
+
+- **Retries connection** — because Kubernetes may start containers in any order, `kubernetes-bootstrap` retries the socket connection at one-second intervals until it connects or the connection timeout is exceeded (default: 120 seconds, configurable via `--kubernetes-bootstrap-connection-timeout`).
+- **Receives environment** — after connecting, the container receives the job environment from the agent. Local environment variables (from `agent-stack-k8s` configuration) take precedence over the agent-provided values.
+- **Swallows OS signals** — the container ignores `SIGTERM`, `SIGHUP`, `SIGINT`, and `SIGQUIT`, waiting instead for a cancellation signal from the agent container via the socket. This prevents Kubernetes's pod deletion signal from prematurely killing the bootstrap before the agent has had a chance to clean up.
+
+## Tags from Kubernetes
+
+When `--kubernetes-exec` is enabled, the agent automatically collects tags from the Kubernetes node the pod is running on (via the `TagsFromK8s` configuration path). This means you can target specific node types using agent tags without additional configuration.
+
+## Example Kubernetes pod spec
+
+The following is a simplified example of how `agent-stack-k8s` structures a pod. The agent container runs with `--kubernetes-exec`, and step containers run `kubernetes-bootstrap`.
+
+```yaml
+apiVersion: v1
+kind: Pod
+spec:
+  containers:
+    - name: agent
+      image: buildkite/agent:3-ubuntu-22.04
+      args:
+        - start
+        - --kubernetes-exec
+        - --kubernetes-container-start-timeout=5m
+      env:
+        - name: BUILDKITE_AGENT_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: buildkite-agent-token
+              key: token
+      volumeMounts:
+        - name: workspace
+          mountPath: /workspace
+
+    - name: step-checkout
+      image: buildkite/agent:3-ubuntu-22.04
+      args:
+        - kubernetes-bootstrap
+      env:
+        - name: BUILDKITE_KUBERNETES_CONTAINER_ID
+          value: "0"
+        - name: BUILDKITE_BOOTSTRAP_PHASES
+          value: "checkout"
+      volumeMounts:
+        - name: workspace
+          mountPath: /workspace
+
+    - name: step-command
+      image: my-app:latest
+      args:
+        - kubernetes-bootstrap
+      env:
+        - name: BUILDKITE_KUBERNETES_CONTAINER_ID
+          value: "1"
+        - name: BUILDKITE_BOOTSTRAP_PHASES
+          value: "command"
+      volumeMounts:
+        - name: workspace
+          mountPath: /workspace
+
+  volumes:
+    - name: workspace
+      emptyDir: {}
+```
+
+<Warning>
+The socket file is created at `/workspace/buildkite.sock` with world-readable permissions so that all containers in the pod can connect. Ensure the `workspace` volume is shared between all containers in the pod using an `emptyDir` or equivalent shared volume.
+</Warning>

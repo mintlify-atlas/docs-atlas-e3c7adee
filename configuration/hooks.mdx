@@ -1,0 +1,270 @@
+---
+title: "Agent and job lifecycle hooks"
+description: "Use shell hooks to customize every stage of the Buildkite Agent job lifecycle — from checkout and command execution to artifact upload and post-exit cleanup."
+---
+
+Hooks are shell scripts (or any executable) that the Buildkite Agent runs at specific points in the job lifecycle. They let you inject custom logic — installing dependencies, configuring credentials, modifying the environment, enforcing security policies — without modifying pipeline YAML. Hooks placed in the agent's global hooks directory run for every job on that agent; hooks inside a checked-out repository scope to that pipeline; and plugin hooks scope to a single step.
+
+## Hook locations
+
+The agent looks for hooks in three places, checked in order:
+
+1. **Global hooks** (`hooks-path`) — set via `BUILDKITE_HOOKS_PATH` or the `hooks-path` config key. Applies to all jobs on the agent.
+2. **Local hooks** (`.buildkite/hooks/` in the repo) — run after checkout, unless `--no-local-hooks` is set.
+3. **Plugin hooks** — provided by plugins listed in the step's `plugins` block.
+
+<Tip>
+  Use `BUILDKITE_ADDITIONAL_HOOKS_PATHS` to specify additional directories that the agent searches for global hooks, after the primary `hooks-path`.
+</Tip>
+
+## Hook execution order
+
+For each lifecycle event, hooks fire in the order: **global → local → plugin**.
+
+The `command` hook is the exception: only one `command` hook runs per job. The agent picks the first one it finds, checking plugin hooks first, then local, then global.
+
+```
+environment        (global only)
+pre-checkout       (global, plugin)
+  [checkout]       (global, plugin, or built-in git checkout)
+post-checkout      (global, local, plugin)
+pre-command        (global, local, plugin)
+  [command]        (plugin, local, or global — first found wins)
+post-command       (global, local, plugin)
+pre-artifact       (global, local, plugin)
+  [artifact upload]
+post-artifact      (global, local, plugin)
+pre-exit           (global, local, plugin)
+```
+
+## Hook types
+
+<AccordionGroup>
+  <Accordion title="environment" defaultOpen={true}>
+    **Scope:** global only
+
+    Runs before checkout, before any other hooks. Use it to export environment variables (credentials, tool versions, proxy settings) that subsequent hooks and the build command will inherit. Changes to the environment made here are visible to all later stages.
+
+    ```bash
+    #!/bin/bash
+    set -euo pipefail
+
+    # Export credentials from a secret store
+    export AWS_ACCESS_KEY_ID="$(vault read -field=key secret/aws)"
+    export AWS_SECRET_ACCESS_KEY="$(vault read -field=secret secret/aws)"
+
+    # Pin tool versions
+    export NODE_VERSION="20.11.0"
+    ```
+
+    <Warning>
+      The `environment` hook runs as the agent user with full network access. Avoid printing secrets; use `buildkite-agent redactor add` to register sensitive values for redaction in logs.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="pre-checkout">
+    **Scope:** global, plugin
+
+    Runs immediately before the repository is cloned or updated. Use it to configure SSH keys, install Git LFS, or set up a custom checkout strategy.
+
+    ```bash
+    #!/bin/bash
+    set -euo pipefail
+
+    # Add a deploy key before checkout
+    eval "$(ssh-agent -s)"
+    ssh-add ~/.ssh/deploy_key
+    ```
+  </Accordion>
+
+  <Accordion title="checkout">
+    **Scope:** global, plugin
+
+    Replaces the built-in `git clone` / `git fetch` / `git checkout` sequence entirely. When a `checkout` hook is present (plugin first, then global), the agent skips its default checkout logic. Use this to implement custom checkout strategies such as sparse checkouts or alternative VCS systems.
+
+    ```bash
+    #!/bin/bash
+    set -euo pipefail
+
+    # Custom sparse checkout
+    git init
+    git remote add origin "$BUILDKITE_REPO"
+    git fetch --depth=1 origin "$BUILDKITE_COMMIT"
+    git sparse-checkout set src tests
+    git checkout FETCH_HEAD
+    ```
+  </Accordion>
+
+  <Accordion title="post-checkout">
+    **Scope:** global, local, plugin
+
+    Runs after the repository has been checked out and the working directory is set. Use it to install dependencies, decrypt secrets, or validate the repository state.
+
+    ```bash
+    #!/bin/bash
+    set -euo pipefail
+
+    # Install dependencies after checkout
+    if [[ -f package.json ]]; then
+      npm ci
+    fi
+    ```
+  </Accordion>
+
+  <Accordion title="pre-command">
+    **Scope:** global, local, plugin
+
+    Runs immediately before the build command. The working directory is the checked-out repository root.
+
+    ```bash
+    #!/bin/bash
+    set -euo pipefail
+
+    echo "--- :lock: Checking license headers"
+    ./scripts/check-license-headers.sh
+    ```
+  </Accordion>
+
+  <Accordion title="command">
+    **Scope:** global, local, plugin (first found wins)
+
+    Replaces the pipeline's `command` field entirely. Only one `command` hook runs per job. The agent checks for a plugin `command` hook first, then a local one, then a global one. If none is found, the agent runs the `command` from the pipeline step directly.
+
+    Use a global `command` hook to enforce a wrapper around all commands (for example, to run them inside a container).
+
+    ```bash
+    #!/bin/bash
+    set -euo pipefail
+
+    # Run all commands inside a Docker container
+    docker run --rm \
+      -v "$(pwd):/workspace" \
+      -w /workspace \
+      "myorg/build-image:latest" \
+      bash -c "$BUILDKITE_COMMAND"
+    ```
+  </Accordion>
+
+  <Accordion title="post-command">
+    **Scope:** global, local, plugin
+
+    Runs after the build command completes (whether it succeeded or failed). Use it for cleanup, reporting, or uploading supplemental data.
+
+    ```bash
+    #!/bin/bash
+    set -euo pipefail
+
+    # Upload coverage report regardless of command exit status
+    if [[ -f coverage/lcov.info ]]; then
+      buildkite-agent artifact upload "coverage/**/*"
+    fi
+    ```
+  </Accordion>
+
+  <Accordion title="pre-artifact">
+    **Scope:** global, local, plugin
+
+    Runs before artifact upload begins. Use it to prepare or validate artifacts.
+
+    ```bash
+    #!/bin/bash
+    set -euo pipefail
+
+    echo "--- Compressing build artefacts"
+    tar -czf dist.tar.gz dist/
+    ```
+  </Accordion>
+
+  <Accordion title="post-artifact">
+    **Scope:** global, local, plugin
+
+    Runs after artifact upload completes. Use it for post-upload notifications or cleanup.
+  </Accordion>
+
+  <Accordion title="pre-exit">
+    **Scope:** global, local, plugin
+
+    Runs as the very last step before the agent reports the job result back to Buildkite. This hook always fires, even if an earlier phase failed. Use it for teardown tasks such as stopping background services, cleaning temporary files, or capturing diagnostic data on failure.
+
+    ```bash
+    #!/bin/bash
+
+    # Stop any background services started during the build
+    if [[ -f /tmp/myservice.pid ]]; then
+      kill "$(cat /tmp/myservice.pid)" 2>/dev/null || true
+    fi
+    ```
+
+    <Note>
+      The `pre-exit` hook runs in a separate shell from the command phase, so environment variable changes from the `command` hook are not visible here.
+    </Note>
+  </Accordion>
+</AccordionGroup>
+
+## Writing hook scripts
+
+Hook scripts are ordinary shell scripts. The agent treats a file as a shell hook if it has no shebang, a POSIX shell shebang, or a PowerShell shebang (`.ps1`). Binary executables are also supported and run directly.
+
+<CodeGroup>
+
+```bash environment (bash)
+#!/bin/bash
+set -euo pipefail
+
+# Export credentials
+export MY_API_KEY="$(cat /run/secrets/api-key)"
+```
+
+```powershell environment.ps1 (PowerShell)
+$ErrorActionPreference = "Stop"
+
+# Export credentials
+$env:MY_API_KEY = Get-Content "/run/secrets/api-key"
+```
+
+</CodeGroup>
+
+<Tip>
+  Use `set -euo pipefail` in bash hooks so that the hook exits immediately on error and unset variables. This prevents silent failures from propagating to the build.
+</Tip>
+
+Environment variable changes made by a hook script propagate to subsequent hooks and the build command. The agent captures variable changes by diffing the environment before and after the hook runs, so you can use `export` normally.
+
+## Hooks shell
+
+By default, hook scripts are run with the same shell as build commands (`BUILDKITE_SHELL`). To use a different shell for hooks only — for example, to run hooks as PowerShell scripts on a Linux agent — set `BUILDKITE_HOOKS_SHELL`.
+
+```ini
+# buildkite-agent.cfg
+hooks-shell="pwsh -Command"
+```
+
+```bash
+BUILDKITE_HOOKS_SHELL="pwsh -Command"
+```
+
+## Local hooks
+
+Local hooks live in the `.buildkite/hooks/` directory inside your repository. They have the same names and lifecycle as global hooks, but run only for that pipeline.
+
+```
+your-repo/
+└── .buildkite/
+    └── hooks/
+        ├── post-checkout   # install dependencies
+        ├── pre-command     # lint or validate
+        └── pre-exit        # cleanup
+```
+
+<Warning>
+  Local hooks run arbitrary code from the repository. Consider whether untrusted contributors could modify them. Use `BUILDKITE_NO_LOCAL_HOOKS=true` on agents that run untrusted code.
+</Warning>
+
+## Strict single-hooks mode
+
+By default, the agent runs all matching hook files in a directory. Enable `--strict-single-hooks` (or `BUILDKITE_STRICT_SINGLE_HOOKS=true`) to make the agent fail the job if more than one hook file matches a given hook name in any directory.
+
+```ini
+# buildkite-agent.cfg
+strict-single-hooks=true
+```
